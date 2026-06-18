@@ -1965,16 +1965,31 @@ final class CardFlowLayout: NSCollectionViewLayout {
     // AND reorder broke the moment we stopped subclassing NSCollectionViewFlowLayout (it
     // synthesized them for free). Re-supply them from our cached item/header frames.
 
-    // Drop ONTO an item (file a tile into a folder): the item under the point, else nearest.
-    override func layoutAttributesForDropTarget(at pointInCollectionView: NSPoint) -> NSCollectionViewLayoutAttributes? {
-        for (_, a) in itemAttrs where a.frame.contains(pointInCollectionView) { return a }
-        var best: NSCollectionViewLayoutAttributes?
-        var bestDist = CGFloat.greatestFiniteMagnitude
-        for (_, a) in itemAttrs {
-            let d = hypot(a.frame.midX - pointInCollectionView.x, a.frame.midY - pointInCollectionView.y)
-            if d < bestDist { bestDist = d; best = a }
+    // Translate the hover point into a drop target. The returned attribute's CATEGORY is
+    // the decision: an ITEM attribute proposes a drop ONTO that item (.on — e.g. file a
+    // skill into a folder), an INTER-ITEM-GAP attribute proposes an insertion (.before —
+    // i.e. reorder). So we must return a gap for most of the surface and an item only over
+    // its centre — otherwise every drop is an ".on" and reorder can never happen (which is
+    // exactly what was broken: folders nested into whatever was adjacent, nothing reordered).
+    override func layoutAttributesForDropTarget(at point: NSPoint) -> NSCollectionViewLayoutAttributes? {
+        // Over an item: centre third → drop ONTO it; left/right thirds → reorder gap.
+        for (ip, a) in itemAttrs where a.frame.contains(point) {
+            let f = a.frame
+            let edge = f.width * 0.34
+            if point.x <= f.minX + edge { return layoutAttributesForInterItemGap(before: ip) }
+            if point.x >= f.maxX - edge { return layoutAttributesForInterItemGap(before: IndexPath(item: ip.item + 1, section: ip.section)) }
+            return a
         }
-        return best
+        // Between items / margins: snap to the nearest reorder gap (insert before or after
+        // the nearest item depending on which side of its centre we're on).
+        var bestIP: IndexPath?
+        var bestDist = CGFloat.greatestFiniteMagnitude
+        for (ip, a) in itemAttrs {
+            let d = hypot(a.frame.midX - point.x, a.frame.midY - point.y)
+            if d < bestDist { bestDist = d; bestIP = ip }
+        }
+        guard let ip = bestIP, let f = itemAttrs[ip]?.frame else { return nil }
+        return layoutAttributesForInterItemGap(before: point.x > f.midX ? IndexPath(item: ip.item + 1, section: ip.section) : ip)
     }
 
     // Drop BETWEEN items (reorder): a thin gap attribute at the leading edge of the item
@@ -2225,9 +2240,22 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
                         proposedIndexPath proposedDropIndexPath: AutoreleasingUnsafeMutablePointer<NSIndexPath>,
                         dropOperation proposedDropOperation: UnsafeMutablePointer<NSCollectionView.DropOperation>) -> NSDragOperation {
         let idx = proposedDropIndexPath.pointee as IndexPath
+        let draggingFolder = (draggingInfo.draggingPasteboard.pasteboardItems?.first?
+            .string(forType: skelfEntryType)?.hasPrefix("folder:")) ?? false
         if proposedDropOperation.pointee == .on {
-            if case .folder = entry(at: idx) { return .move }
+            // Keep ".on" ONLY for a skill dropped onto a folder (file it in). A folder
+            // dropped onto a folder, or anything onto a skill, becomes a reorder — so
+            // folders never nest by accident and a centre-drop still reorders.
+            if case .folder = entry(at: idx), !draggingFolder { return .move }
             proposedDropOperation.pointee = .before
+        }
+        // Reorder (.before) is only meaningful WITHIN the matching kind. Reject a skill
+        // dropped at a folder gap (or a folder at a skill gap) so it can't silently jump to
+        // the end of its own list — the drop indicator then only shows where it makes sense.
+        switch entry(at: idx) {
+        case .folder where !draggingFolder: return []
+        case .skill where draggingFolder: return []
+        default: break   // matching kind, or .none (end-of-section gap) → allow
         }
         return .move
     }
