@@ -21,6 +21,7 @@ import Observation
 import QuartzCore
 import CoreServices
 import ServiceManagement
+import Carbon.HIToolbox
 
 // MARK: - Model
 
@@ -626,12 +627,66 @@ enum Sound {
     }
 }
 
+// The app's appearance override (a standard macOS preference). System defers to the OS.
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
+    var label: String {
+        switch self { case .system: return "Follow System"; case .light: return "Light"; case .dark: return "Dark" }
+    }
+    var nsAppearance: NSAppearance? {
+        switch self {
+        case .system: return nil
+        case .light:  return NSAppearance(named: .aqua)
+        case .dark:   return NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
+// A system-wide hot-key to toggle the menu-bar popover, via Carbon's RegisterEventHotKey —
+// the one API that works from the background without Accessibility permissions. The default
+// chord is ⌥⌘S; `onFire` is wired once by the AppDelegate and runs on the main thread.
+final class GlobalHotKey {
+    static let shared = GlobalHotKey()
+    static let defaultKeyCode = UInt32(kVK_ANSI_S)
+    static let defaultModifiers = UInt32(cmdKey | optionKey)
+    static let displayString = "⌥⌘S"
+
+    var onFire: (() -> Void)?
+    private var ref: EventHotKeyRef?
+    private var handler: EventHandlerRef?
+    private let signature: OSType = 0x534B_4C46            // 'SKLF'
+
+    var isRegistered: Bool { ref != nil }
+
+    func register(keyCode: UInt32 = GlobalHotKey.defaultKeyCode, modifiers: UInt32 = GlobalHotKey.defaultModifiers) {
+        unregister()
+        if handler == nil {
+            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: OSType(kEventHotKeyPressed))
+            InstallEventHandler(GetApplicationEventTarget(), { _, _, userData in
+                guard let userData = userData else { return noErr }
+                Unmanaged<GlobalHotKey>.fromOpaque(userData).takeUnretainedValue().onFire?()
+                return noErr
+            }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &handler)
+        }
+        let hotKeyID = EventHotKeyID(signature: signature, id: 1)
+        RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetApplicationEventTarget(), 0, &ref)
+    }
+
+    func unregister() {
+        if let r = ref { UnregisterEventHotKey(r); ref = nil }
+    }
+}
+
 // App-wide preferences shown in the Settings window. Each toggle persists to UserDefaults
 // and applies its side effect immediately.
 @Observable
 final class AppSettings {
     static let shared = AppSettings()
-    private enum Keys { static let menuBarOnly = "menuBarOnly", reduceMotion = "reduceMotion", usePaintings = "usePaintings" }
+    private enum Keys {
+        static let menuBarOnly = "menuBarOnly", reduceMotion = "reduceMotion", usePaintings = "usePaintings"
+        static let appearance = "appearance", globalHotKey = "globalHotKeyEnabled"
+    }
 
     private var applyingLogin = false
     /// Open at login via the modern ServiceManagement API (macOS 13+).
@@ -662,6 +717,14 @@ final class AppSettings {
             NotificationCenter.default.post(name: AppSettings.artChanged, object: nil)
         }
     }
+    /// Light / Dark / Follow System override for the whole app.
+    var appearance: AppAppearance {
+        didSet { UserDefaults.standard.set(appearance.rawValue, forKey: Keys.appearance); applyAppearance() }
+    }
+    /// Toggle the menu-bar popover from anywhere with ⌥⌘S.
+    var globalHotKey: Bool {
+        didSet { UserDefaults.standard.set(globalHotKey, forKey: Keys.globalHotKey); applyHotKey() }
+    }
     static let artChanged = Notification.Name("SkelfArtSettingChanged")
 
     private init() {
@@ -670,14 +733,23 @@ final class AppSettings {
         playSounds = Sound.enabled
         reduceMotion = UserDefaults.standard.bool(forKey: Keys.reduceMotion)
         usePaintings = (UserDefaults.standard.object(forKey: Keys.usePaintings) as? Bool) ?? true
+        appearance = AppAppearance(rawValue: UserDefaults.standard.string(forKey: Keys.appearance) ?? "") ?? .system
+        globalHotKey = (UserDefaults.standard.object(forKey: Keys.globalHotKey) as? Bool) ?? true
     }
 
     func applyMenuBarOnly() {
         NSApp.setActivationPolicy(menuBarOnly ? .accessory : .regular)
         if !menuBarOnly { NSApp.activate(ignoringOtherApps: true) }
     }
-    /// Apply persisted policy once at launch (before the UI shows).
-    func applyOnLaunch() { if menuBarOnly { NSApp.setActivationPolicy(.accessory) } }
+    func applyAppearance() { NSApp.appearance = appearance.nsAppearance }
+    func applyHotKey() {
+        if globalHotKey { GlobalHotKey.shared.register() } else { GlobalHotKey.shared.unregister() }
+    }
+    /// Apply persisted policy + appearance once at launch (before the UI shows).
+    func applyOnLaunch() {
+        if menuBarOnly { NSApp.setActivationPolicy(.accessory) }
+        applyAppearance()
+    }
 }
 
 // A Liquid Glass card whose corners are concentric with their container (macOS 27).
@@ -848,6 +920,18 @@ final class ArtStore {
         // Seed the dedup set with every image already claimed by the curated map, so a
         // runtime-resolved skill never reuses a curated painting.
         for e in map.values { if let iid = Self.aicImageId(e.url) { usedImages.insert(iid) } }
+    }
+
+    /// Forget every downloaded painting (memory + disk) so the next view re-fetches it.
+    /// Runtime picks reset too; the curated dedup seed is rebuilt from the bundled map.
+    func clearCache() {
+        mem.removeAll(); failed.removeAll(); inflight.removeAll(); waiters.removeAll()
+        runtimeAttribution.removeAll(); runtimeWhy.removeAll()
+        usedImages.removeAll()
+        for e in map.values { if let iid = Self.aicImageId(e.url) { usedImages.insert(iid) } }
+        if let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            for f in files { try? FileManager.default.removeItem(at: f) }
+        }
     }
 
     private static func aicImageId(_ url: String) -> String? {
@@ -2963,6 +3047,13 @@ final class SkelfModel {
         id == favoritesFolderId ? "Favorites" : (folders.node(id)?.name ?? "Folder")
     }
 
+    /// The folder currently on screen (the deepest `.folder` route), or root. Used by the
+    /// File ▸ New Folder menu so a new folder lands where the user is looking.
+    var currentFolderId: String {
+        for route in path.reversed() { if case .folder(let id) = route { return id } }
+        return folders.rootId
+    }
+
     func openSkill(_ id: String) { if skill(id) != nil { path = [.skill(id)] } }
     func enterFolder(_ id: String) {
         if id == favoritesFolderId { path = [.folder(favoritesFolderId)]; return }
@@ -2988,14 +3079,29 @@ final class SkelfModel {
 // The Settings window (opened from the Skelf app menu ⌘, and the menu-bar ⋯ menu).
 struct SettingsView: View {
     @Bindable var settings: AppSettings
+    @State private var refreshing = false
     var body: some View {
         Form {
             Section("General") {
                 row("Launch at Login", "Open Skelf automatically when you sign in.", $settings.launchAtLogin)
                 row("Menu Bar Only", "Run Skelf from the menu bar without a Dock icon.", $settings.menuBarOnly)
+                row("Global Shortcut", "Toggle the menu-bar popover from anywhere with \(GlobalHotKey.displayString).", $settings.globalHotKey)
+                pickerRow("Appearance", "Match the system, or force a Light or Dark look.") {
+                    Picker("", selection: $settings.appearance) {
+                        ForEach(AppAppearance.allCases) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden().pickerStyle(.segmented).fixedSize()
+                }
             }
             Section("Appearance & Feedback") {
                 row("Show Painting Covers", "Use museum paintings on skill cards. Off uses generated art (fully offline).", $settings.usePaintings)
+                buttonRow("Refresh Painting Art", "Clear the downloaded paintings and fetch them again.",
+                          button: refreshing ? "Refreshing…" : "Refresh", disabled: refreshing || !settings.usePaintings) {
+                    refreshing = true
+                    ArtStore.shared.clearCache()
+                    NotificationCenter.default.post(name: AppSettings.artChanged, object: nil)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { refreshing = false }
+                }
                 row("Reduce Motion", "Turn off the pop and spring animations.", $settings.reduceMotion)
                 row("Play Sounds", "A subtle sound on copy and other actions.", $settings.playSounds)
             }
@@ -3005,14 +3111,31 @@ struct SettingsView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
     @ViewBuilder private func row(_ title: String, _ subtitle: String, _ binding: Binding<Bool>) -> some View {
-        Toggle(isOn: binding) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.body).fontWeight(.semibold)
-                Text(subtitle).font(.callout).foregroundStyle(.secondary)
-            }
+        Toggle(isOn: binding) { labelText(title, subtitle) }
+            .toggleStyle(.switch)
+            .padding(.vertical, 3)
+    }
+    @ViewBuilder private func pickerRow<Control: View>(_ title: String, _ subtitle: String, @ViewBuilder control: () -> Control) -> some View {
+        HStack {
+            labelText(title, subtitle)
+            Spacer()
+            control()
         }
-        .toggleStyle(.switch)
         .padding(.vertical, 3)
+    }
+    @ViewBuilder private func buttonRow(_ title: String, _ subtitle: String, button: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+        HStack {
+            labelText(title, subtitle)
+            Spacer()
+            Button(button, action: action).disabled(disabled)
+        }
+        .padding(.vertical, 3)
+    }
+    @ViewBuilder private func labelText(_ title: String, _ subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.body).fontWeight(.semibold)
+            Text(subtitle).font(.callout).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -3901,6 +4024,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         }
         popover.delegate = self
         setupStatusItem()
+        // The system-wide ⌥⌘S hot-key toggles the popover (registers only if the user left it on).
+        GlobalHotKey.shared.onFire = { [weak self] in self?.togglePopover(nil) }
+        AppSettings.shared.applyHotKey()
         showWindow()
         startWatching()
         if let i = CommandLine.arguments.firstIndex(of: "--open"), i + 1 < CommandLine.arguments.count {
@@ -3942,6 +4068,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Skelf", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
+        let fileItem = NSMenuItem()
+        main.addItem(fileItem)
+        let fileMenu = NSMenu(title: "File")
+        fileItem.submenu = fileMenu
+        fileMenu.addItem(withTitle: "New Folder", action: #selector(newFolderAction), keyEquivalent: "n").target = self
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(withTitle: "Refresh Skills", action: #selector(refreshSkills), keyEquivalent: "r").target = self
+        let closeWin = fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        closeWin.keyEquivalentModifierMask = [.command]
+
         let editItem = NSMenuItem()
         main.addItem(editItem)
         let editMenu = NSMenu(title: "Edit")
@@ -3954,6 +4090,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        let windowItem = NSMenuItem()
+        main.addItem(windowItem)
+        let windowMenu = NSMenu(title: "Window")
+        windowItem.submenu = windowMenu
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        NSApp.windowsMenu = windowMenu      // lets macOS list/track open windows here
+
+        let helpItem = NSMenuItem()
+        main.addItem(helpItem)
+        let helpMenu = NSMenu(title: "Help")
+        helpItem.submenu = helpMenu
+        helpMenu.addItem(withTitle: "Skelf Help", action: #selector(showHelp), keyEquivalent: "?").target = self
+        NSApp.helpMenu = helpMenu
 
         NSApp.mainMenu = main
     }
@@ -3978,6 +4131,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // File ▸ New Folder — create a folder where the user is currently looking.
+    @objc private func newFolderAction() {
+        showWindow()
+        model?.newFolder(in: model?.currentFolderId ?? folders.rootId)
+    }
+
+    // File ▸ Refresh Skills (⌘R) — re-scan the skill directories now.
+    @objc private func refreshSkills() { reloadFromDisk(auto: false) }
+
+    // Help ▸ Skelf Help — a short primer (no bundled help book).
+    @objc private func showHelp() {
+        let a = NSAlert()
+        a.messageText = "Skelf Help"
+        a.informativeText = """
+        Browse your installed Claude Code skills as a grid of painting-covered cards.
+
+        • Click a card to open its details, then Copy to put its /slash-command on the clipboard.
+        • Click a card's ★ to favorite it — favorites pin to the top and to the menu bar.
+        • Folders group skills by creator automatically; make your own with File ▸ New Folder.
+        • Press \(GlobalHotKey.displayString) anywhere to open the menu-bar popover.
+        • Tune behavior in Settings (⌘,) — Launch at Login, Menu Bar Only, theme, and more.
+        """
+        a.addButton(withTitle: "OK")
+        a.runModal()
     }
 
     private func startWatching() {
