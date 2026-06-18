@@ -2145,7 +2145,9 @@ final class SkillDetailView: NSView {
         paintingPopover = pop
     }
 
-    // A big card: the full painting, its museum details + history, then why it fits the skill.
+    // A big card whose painting is FULL-BLEED (fills the popover side-to-side and top),
+    // adapting its height to the artwork's aspect; museum details + history + why sit padded
+    // below.
     private func paintingCard(_ skill: Skill, width W: CGFloat) -> NSView {
         let d = ArtStore.shared.details(skill.id)
         let pad: CGFloat = 18, innerW = W - pad * 2
@@ -2154,17 +2156,18 @@ final class SkillDetailView: NSView {
         card.translatesAutoresizingMaskIntoConstraints = false
         card.widthAnchor.constraint(equalToConstant: W).isActive = true
 
-        let iv = NSImageView()
-        iv.imageScaling = .scaleProportionallyUpOrDown
-        iv.wantsLayer = true; iv.layer?.cornerRadius = 8; iv.layer?.masksToBounds = true
-        iv.translatesAutoresizingMaskIntoConstraints = false
-        var imgH: CGFloat = min(innerW * 1.2, 380)
+        // The painting, edge-to-edge at the top (aspect-fill, height adapts to the art).
+        let art = SkillArtView()
+        art.showScrim = false
+        art.translatesAutoresizingMaskIntoConstraints = false
+        var imgH: CGFloat = min(W * 420 / 320, 460)
         if let img = ArtStore.shared.cached(skill.id) {
-            iv.image = img
-            if img.size.width > 0 { imgH = min(innerW * img.size.height / img.size.width, 380) }
+            art.setAvatar(img)
+            if img.size.width > 0 { imgH = min(W * img.size.height / img.size.width, 460) }
         } else {
-            iv.image = NSImage(cgImage: SkillArtView.themedImage(skill), size: NSSize(width: 320, height: 420))
+            art.setThemedFallback(skill)
         }
+        card.addSubview(art)
 
         func lbl(_ s: String, _ size: CGFloat, _ w: NSFont.Weight, _ c: NSColor) -> NSTextField {
             let l = NSTextField(wrappingLabelWithString: s)
@@ -2176,11 +2179,6 @@ final class SkillDetailView: NSView {
         let stack = NSStackView()
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(iv)
-        iv.widthAnchor.constraint(equalToConstant: innerW).isActive = true
-        iv.heightAnchor.constraint(equalToConstant: imgH).isActive = true
-        stack.setCustomSpacing(14, after: iv)
-
         stack.addArrangedSubview(lbl(d?.title ?? "Generated cover art", 17, .bold, .labelColor))
         if let a = d?.artist, !a.isEmpty { stack.addArrangedSubview(lbl(a, 13.5, .regular, .labelColor)) }
         let metaParts = [d?.date, d?.origin, d?.medium].compactMap { $0 }.filter { !$0.isEmpty }
@@ -2201,13 +2199,16 @@ final class SkillDetailView: NSView {
         stack.addArrangedSubview(lbl("WHY THIS PAINTING FOR THIS SKILL", 10.5, .semibold, .tertiaryLabelColor))
         let whyText = (d?.why).flatMap { $0.isEmpty ? nil : $0 } ?? "This skill uses a generated cover (no museum painting matched)."
         stack.addArrangedSubview(lbl(whyText, 13.5, .medium, .labelColor))
-        let lic = lbl(d?.license ?? "Generated artwork", 11, .regular, .tertiaryLabelColor)
-        stack.setCustomSpacing(12, after: stack.arrangedSubviews[stack.arrangedSubviews.count - 1])
-        stack.addArrangedSubview(lic)
+        stack.setCustomSpacing(12, after: stack.arrangedSubviews.last!)
+        stack.addArrangedSubview(lbl(d?.license ?? "Generated artwork", 11, .regular, .tertiaryLabelColor))
 
         card.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: card.topAnchor, constant: pad),
+            art.topAnchor.constraint(equalTo: card.topAnchor),
+            art.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            art.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+            art.heightAnchor.constraint(equalToConstant: imgH),
+            stack.topAnchor.constraint(equalTo: art.bottomAnchor, constant: 14),
             stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: pad),
             stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -pad),
             stack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -pad),
