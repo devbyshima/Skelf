@@ -51,7 +51,8 @@ open Skelf.app        # launch (dock icon + window + menu-bar icon)
   favorited skill across all folders; favorites also sort first in the popover.
 - **Folders** (display-only — never touches Claude's config) — the window navigates
   folder-by-folder with a **SwiftUI `NavigationStack`** (tap a folder to push in, the
-  toolbar **back chevron** to go up); a **New Folder** toolbar button creates them. Every
+  toolbar **back chevron** to go up); a **New Folder** toolbar button creates them, with a
+  **Settings** gear button (⚙) right beside it that opens preferences. Every
   tile has a **⋯ menu**: skills offer Open / Copy Slash Command / **Favorite** / **Move
   to Folder…** / **Copy to Folder…** / Cut / Copy / Remove; folders offer Open / Rename /
   New Folder Inside / **Add to Menu Bar** / Cut / Delete. Cut or Copy a skill, navigate
@@ -67,17 +68,38 @@ open Skelf.app        # launch (dock icon + window + menu-bar icon)
   sidebar** has **Source** (creator avatar + repo + View on GitHub), **Slash command**
   (Copy), **Details** (status / version / category / files / installed), and **Actions**
   (Favorite / Add to Folder / Reveal). The toolbar carries a **back chevron**, **Copy**,
-  and a **Favorite** toggle.
+  and a **Favorite** toggle. **Clicking the banner painting** opens a **Liquid-Glass
+  painting panel centered on screen** — the full artwork (layout adapts to landscape vs.
+  portrait) with its title, artist, museum description, and **why this painting was chosen
+  for this skill**; dismiss with **Escape** or a click away.
 - **Menu-bar popover** — Passwords-style with **Liquid Glass** cards that **auto-size**
   to content. The status-bar icon is the **Skelf mark** (`Resources/skelf.svg`, a vector
   template). It shows **Favorites** (copy icon → copies `/name`, with a **"Copied /name"
   toast**) and the **Folders you've added to the menu bar** (folders are hidden until you
-  pick **⋯ → Add to Menu Bar**; chevron rows drill in). **Search** reaches every skill.
-  Top-right has a **window icon** (opens the app) and a **⋯ options menu** (Open Window /
-  Refresh / **Play Sounds** / About / Quit).
+  pick **⋯ → Add to Menu Bar**; chevron rows drill in). **Search** is **global** — it spans
+  **every folder and every skill** in your library (matched on name / description / category
+  / creator), and it's the **same search in the menu bar and the window**, so it behaves
+  identically wherever you invoke it (folder hits drill in, skill hits copy here / open in
+  the window). Top-right has a **window icon** (opens the app) and a **⋯ options menu** (Open Window /
+  Refresh / **Settings…** / **Play Sounds** / About / Quit). Press the global hot-key
+  **⌥⌘S** from anywhere to toggle the popover.
+- **Settings** (**⌘,** from the app menu, the popover's **⋯**, or the **⚙** toolbar
+  button) — a standard grouped **SwiftUI Settings window** opened **centered on screen**.
+  *General*: **Launch at Login** (modern `SMAppService`), **Menu Bar Only** (run with no
+  Dock icon, activation policy `.accessory`), **Global Shortcut** (toggle the ⌥⌘S
+  popover hot-key, via a Carbon system-wide event so it works from the background with no
+  Accessibility prompt), and **Appearance** (Follow System / Light / Dark, applied with
+  `NSApp.appearance`). *Appearance & Feedback*: **Show Painting Covers** (off → the
+  generated art only, fully offline), **Refresh Painting Art** (clears the downloaded
+  paintings and re-fetches), **Reduce Motion** (skip the pop/spring animations), and
+  **Play Sounds**. Each preference applies immediately and persists in `UserDefaults`.
+- **Menus & keyboard** — a full macOS menu bar: **Skelf** (About / **Settings… ⌘,** /
+  Hide / Quit), **File** (**New Folder ⌘N** into the current folder / **Refresh Skills
+  ⌘R** / **Close ⌘W**), **Edit** (**Undo ⌘Z / Redo ⌘⇧Z** + Cut/Copy/Paste/Select All),
+  **Window** (Minimize / Zoom / Bring All to Front), and **Help** (**Skelf Help ⇧⌘?**).
 - **UI sounds** (off by default) — a tasteful system sound on copy (`Tink`) and on a
-  move/drop (`Pop`). Toggle from the popover's **⋯ → Play Sounds**. Persisted in
-  `UserDefaults` (`soundEnabled`).
+  move/drop (`Pop`). Toggle from **Settings → Play Sounds** (or the popover's **⋯ → Play
+  Sounds**). Persisted in `UserDefaults` (`soundEnabled`).
 - **Auto-detect** — an FSEvents watcher on the skill directories updates the app **live**
   when a skill is added, removed, enabled, disabled, or edited — no manual refresh.
 
@@ -96,9 +118,10 @@ Override the base dir with `SKILLS_DEV_DIR=/some/path open Skelf.app`.
 
 Creator avatars (for folders) are fetched once from GitHub and cached at
 `~/Library/Caches/dev.fulltime.skelf/avatars/`; per-skill paintings are downloaded from
-the URLs in `Resources/art-map.json` and cached at `…/dev.fulltime.skelf/art/`. The
-folder overlay, favorites, and the sounds toggle persist in `UserDefaults`
-(`dev.fulltime.skelf`).
+the URLs in `Resources/art-map.json` and cached at `…/dev.fulltime.skelf/art/` (the
+**Refresh Painting Art** setting clears that folder). The folder overlay, favorites, and
+every Settings preference (sounds, menu-bar-only, reduce-motion, painting covers, theme,
+global hot-key) persist in `UserDefaults` (`dev.fulltime.skelf`).
 
 ## CLI modes (no GUI)
 
@@ -133,8 +156,11 @@ Skelf/
 
 ## Notes / possible next steps
 
-- Not code-signed for distribution (ad-hoc only) — fine for personal local use.
-- For a menu-bar-only app (no dock icon), set `LSUIElement` in `Info.plist` and switch
-  the activation policy to `.accessory`.
+- Not code-signed for distribution (ad-hoc only) — fine for personal local use. Note that
+  **Launch at Login** registers reliably only for a signed app in `/Applications`; an
+  ad-hoc local build may revert the toggle (the code reflects the real state if so).
+- Running with **no Dock icon** is now a runtime toggle — **Settings → Menu Bar Only**
+  (it flips the activation policy to `.accessory`), so no `Info.plist` `LSUIElement` edit
+  is needed.
 - Toggling enabled/off is read-only; making it create/remove the `.claude/skills`
   symlink would be the natural next feature.
