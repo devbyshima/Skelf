@@ -107,7 +107,6 @@ final class ToastWindow: NSPanel {
 
         glass.cornerRadius = 16
         glass.style = .regular
-        if #available(macOS 27.0, *) { glass.effectIsInteractive = true }
         glass.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(glass)
         NSLayoutConstraint.activate([
@@ -509,8 +508,8 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
                 sep.heightAnchor.constraint(equalToConstant: 1).isActive = true
             }
         }
-        // Liquid Glass card: the row stack rides inside a glass effect view,
-        // with corners concentric to the popover (macOS 27).
+        // Liquid Glass card: the row stack rides inside a glass effect view (rounded via
+        // cornerRadius; concentric corners return with the macOS 27 SDK — see GlassCardView).
         let n = rows.count
         let h = CGFloat(n * 48 + max(0, n - 1))
         let glass = GlassCardView()
