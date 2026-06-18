@@ -758,11 +758,18 @@ final class CardRootView: NSView {
 }
 
 // A Liquid-Glass circular control overlaid on a card (favorite / ⋯).
+// A frosted circular control overlaid on a card (favorite / ⋯). A *static* translucent
+// disc with a hairline rim — looks glassy but, unlike NSGlassEffectView, doesn't
+// re-sample the backdrop every frame, so a wall of them scrolls/hovers smoothly.
 final class GlassCircleButton: NSView {
     let button = NSButton()
-    private let glass = NSGlassEffectView()
     init(symbol: String, target: AnyObject, action: Selector) {
         super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 15
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.34).cgColor
+        layer?.borderWidth = 0.75
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.28).cgColor
         translatesAutoresizingMaskIntoConstraints = false
         button.isBordered = false
         button.bezelStyle = .regularSquare
@@ -774,18 +781,14 @@ final class GlassCircleButton: NSView {
         button.target = target
         button.action = action
         button.translatesAutoresizingMaskIntoConstraints = false
-        glass.cornerRadius = 15
-        if #available(macOS 27.0, *) { glass.effectIsInteractive = true }
-        glass.contentView = button
-        glass.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(glass)
+        addSubview(button)
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: 30),
             heightAnchor.constraint(equalToConstant: 30),
-            glass.topAnchor.constraint(equalTo: topAnchor),
-            glass.bottomAnchor.constraint(equalTo: bottomAnchor),
-            glass.leadingAnchor.constraint(equalTo: leadingAnchor),
-            glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+            button.topAnchor.constraint(equalTo: topAnchor),
+            button.bottomAnchor.constraint(equalTo: bottomAnchor),
+            button.leadingAnchor.constraint(equalTo: leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -804,6 +807,8 @@ final class SkillGridItem: NSCollectionViewItem {
     private let copyButton = NSButton()
     private var hovering = false
     private var artKey = ""
+    private(set) var skillId = ""
+    private var isFav = false
     var onMenu: ((NSView) -> Void)?
     var onToggleFavorite: (() -> Void)?
     var onCopy: (() -> Void)?
@@ -901,6 +906,7 @@ final class SkillGridItem: NSCollectionViewItem {
     }
 
     func configure(_ skill: Skill, isFavorite: Bool) {
+        skillId = skill.id
         let creator = skill.source.contains("/") ? skill.source.split(separator: "/").first.map(String.init) : nil
         artKey = creator ?? ("grad:" + skill.name)
         if let creator = creator, let img = AvatarStore.shared.cached(creator) {
@@ -920,16 +926,26 @@ final class SkillGridItem: NSCollectionViewItem {
         initiatorBox.layer?.backgroundColor = (skill.enabled ? NSColor.black.withAlphaComponent(0.44)
                                                              : NSColor.systemRed.withAlphaComponent(0.55)).cgColor
         descLabel.stringValue = skill.description.isEmpty ? "No description in SKILL.md." : skill.description
-        favCircle.button.image = NSImage(systemSymbolName: isFavorite ? "star.fill" : "star",
-                                         accessibilityDescription: isFavorite ? "Favorited" : "Favorite")
-        favCircle.button.contentTintColor = isFavorite ? .systemYellow : .white
+        setFavorite(isFavorite, animated: false)
         setCopyTitle("Copy")
         view.alphaValue = skill.enabled ? 1.0 : 0.62
         view.toolTip = "\(skill.initiator)\n\n\(skill.description)"
         resetHover()
     }
 
-    @objc private func favClicked() { onToggleFavorite?() }
+    /// Update the star, optionally with a springy pop (used when the user toggles it).
+    func setFavorite(_ on: Bool, animated: Bool) {
+        isFav = on
+        favCircle.button.image = NSImage(systemSymbolName: on ? "star.fill" : "star",
+                                         accessibilityDescription: on ? "Favorited" : "Favorite")
+        favCircle.button.contentTintColor = on ? .systemYellow : .white
+        if animated { springPop(favCircle.layer, from: on ? 0.5 : 0.86, damping: 9, stiffness: 380) }
+    }
+
+    @objc private func favClicked() {
+        setFavorite(!isFav, animated: true)   // animate in place first…
+        onToggleFavorite?()                    // …then persist (no destructive grid reload)
+    }
     @objc private func menuClicked() { onMenu?(menuCircle) }
     @objc private func copyClicked() {
         onCopy?()
@@ -1881,6 +1897,15 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
 
     func reload() { buildEntries(); collectionView.reloadData() }
 
+    /// Update only the favorite stars on visible cards — no reorder, no reload (so the
+    /// card that was just tapped keeps its in-place pop animation).
+    func refreshFavorites() {
+        guard isViewLoaded else { return }
+        for case let item as SkillGridItem in collectionView.visibleItems() {
+            item.setFavorite(model.favorites.isFavorite(item.skillId), animated: false)
+        }
+    }
+
     private func buildEntries() {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         var e: [GridEntry] = []
@@ -1897,7 +1922,7 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
                 || s.source.lowercased().contains(q)
             return passFilter && passQuery
         }
-        for s in model.favorites.ordered(matched) { e.append(.skill(s)) }
+        for s in matched { e.append(.skill(s)) }   // keep the folder's stored order; favoriting never reorders
         entries = e
     }
 
@@ -2109,6 +2134,7 @@ final class SkelfModel {
 
     var path: [Route] = []
     var reloadToken = 0
+    var favoritesToken = 0      // bumped on favorite changes only (no destructive grid reload)
 
     struct Clip { let id: String; let isFolder: Bool; let cut: Bool; let source: String; let name: String }
     var clip: Clip?
@@ -2121,6 +2147,7 @@ final class SkelfModel {
     }
 
     func bumpReload() { reloadToken &+= 1 }
+    func bumpFavorites() { favoritesToken &+= 1 }
     func skill(_ id: String) -> Skill? { store.skills.first { $0.id == id } }
     func folderName(_ id: String) -> String { folders.node(id)?.name ?? "Folder" }
 
@@ -2167,9 +2194,10 @@ struct FolderScreen: View {
 
     var body: some View {
         let token = model.reloadToken
+        let favTok = model.favoritesToken
         let hasClip = model.clip != nil
         let clipName = model.clip?.name ?? ""
-        GridRepresentable(model: model, folderId: folderId, query: query, filter: 0, token: token,
+        GridRepresentable(model: model, folderId: folderId, query: query, filter: 0, token: token, favToken: favTok,
                           onOpenSkill: { model.path.append(.skill($0)) },
                           onOpenFolder: { model.path.append(.folder($0)) })
             .navigationTitle(folderId == model.folders.rootId ? "Skelf" : model.folderName(folderId))
@@ -2197,8 +2225,9 @@ struct SkillDetailScreen: View {
 
     var body: some View {
         let token = model.reloadToken
+        let favTok = model.favoritesToken
         let fav = model.favorites.isFavorite(skillId)
-        DetailRepresentable(model: model, skillId: skillId, token: token)
+        DetailRepresentable(model: model, skillId: skillId, token: token, favToken: favTok)
             .navigationTitle(model.skill(skillId)?.name ?? skillId)
             .toolbar {
                 ToolbarItem {
@@ -2221,6 +2250,7 @@ struct GridRepresentable: NSViewControllerRepresentable {
     let query: String
     let filter: Int
     let token: Int
+    let favToken: Int
     let onOpenSkill: (String) -> Void
     let onOpenFolder: (String) -> Void
 
@@ -2234,6 +2264,7 @@ struct GridRepresentable: NSViewControllerRepresentable {
         vc.onOpenSkill = onOpenSkill
         vc.onOpenFolder = onOpenFolder
         vc.apply(query: query, filter: filter, token: token)
+        vc.refreshFavorites()   // favorite-only changes: update stars in place, no reload
     }
 }
 
@@ -2241,6 +2272,10 @@ struct DetailRepresentable: NSViewRepresentable {
     let model: SkelfModel
     let skillId: String
     let token: Int
+    let favToken: Int
+
+    final class Coordinator { var lastSkillId = ""; var lastToken = -1 }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> SkillDetailView {
         let v = SkillDetailView(frame: .zero)
@@ -2256,7 +2291,13 @@ struct DetailRepresentable: NSViewRepresentable {
         return v
     }
     func updateNSView(_ v: SkillDetailView, context: Context) {
-        if let s = model.skill(skillId) { v.configure(s, isFavorite: model.favorites.isFavorite(skillId)) }
+        let c = context.coordinator
+        // full reconfigure (re-renders the SKILL.md) only when the skill or data changes…
+        if let s = model.skill(skillId), c.lastSkillId != skillId || c.lastToken != token {
+            v.configure(s, isFavorite: model.favorites.isFavorite(skillId))
+            c.lastSkillId = skillId; c.lastToken = token
+        }
+        v.setFavorite(model.favorites.isFavorite(skillId))   // …favorite-only changes are a light update
     }
 }
 
@@ -2417,9 +2458,7 @@ final class ToastWindow: NSPanel {
         iconView.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)
         iconView.contentTintColor = .systemGreen
         label.stringValue = message
-        let labelW = labelWidth(message)
-        let w = min(max(220, 15 + 16 + 9 + labelW + 14 + 46 + 13), popover.frame.width)
-        animateIn(width: w, below: popover, dismissAfter: 4.0)
+        animateIn(width: popover.frame.width, below: popover, dismissAfter: 4.0)
     }
 
     /// Plain message toast (no Undo) — e.g. "Copied /name".
@@ -2429,15 +2468,9 @@ final class ToastWindow: NSPanel {
         iconView.image = NSImage(systemSymbolName: icon, accessibilityDescription: nil)
         iconView.contentTintColor = .systemGreen
         label.stringValue = message
-        let labelW = labelWidth(message)
-        let w = min(max(170, 15 + 16 + 9 + labelW + 16), max(170, popover.frame.width))
-        animateIn(width: w, below: popover, dismissAfter: 1.8)
+        animateIn(width: popover.frame.width, below: popover, dismissAfter: 1.8)
     }
 
-    private func labelWidth(_ s: String) -> CGFloat {
-        let font = label.font ?? NSFont.systemFont(ofSize: 12.5)
-        return ceil((s as NSString).size(withAttributes: [.font: font]).width)
-    }
 
     private func animateIn(width w: CGFloat, below popover: NSWindow, dismissAfter: TimeInterval) {
         let h: CGFloat = 46
@@ -3007,13 +3040,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         folders.autoCategorize(store.skills)
         setupMainMenu()
         dlog("launched -> \(store.skills.count) skills")
-        // a pin OR a folder change anywhere re-renders both the window and the popover
-        let refreshAll: () -> Void = { [weak self] in
+        // A folder change reloads the grid + popover; a favorite change only updates
+        // stars (no destructive grid reload — cards animate their star in place).
+        folders.onChange = { [weak self] in
             self?.model?.bumpReload()
             self?.popoverController?.reload()
         }
-        favorites.onChange = refreshAll
-        folders.onChange = refreshAll
+        favorites.onChange = { [weak self] in
+            self?.model?.bumpFavorites()
+            self?.popoverController?.reload()
+        }
         popover.delegate = self
         setupStatusItem()
         showWindow()
