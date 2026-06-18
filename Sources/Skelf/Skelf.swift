@@ -2644,7 +2644,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
 
         let clip = scroll.contentView
         NSLayoutConstraint.activate([
-            leftStack.topAnchor.constraint(equalTo: root.topAnchor, constant: 13),
+            leftStack.topAnchor.constraint(equalTo: root.topAnchor, constant: 18),
             leftStack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             leftStack.trailingAnchor.constraint(lessThanOrEqualTo: windowButton.leadingAnchor, constant: -8),
             windowButton.centerYAnchor.constraint(equalTo: leftStack.centerYAnchor),
@@ -2656,14 +2656,14 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
             optionsButton.widthAnchor.constraint(equalToConstant: 24),
             optionsButton.heightAnchor.constraint(equalToConstant: 20),
 
-            searchField.topAnchor.constraint(equalTo: leftStack.bottomAnchor, constant: 10),
+            searchField.topAnchor.constraint(equalTo: leftStack.bottomAnchor, constant: 14),
             searchField.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             searchField.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
 
-            scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 10),
+            scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 14),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
+            scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
 
             doc.topAnchor.constraint(equalTo: clip.topAnchor),
             doc.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
@@ -2701,12 +2701,12 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     // Size the popover to fit its content (shrink when few items; cap + scroll when many).
     private func resizeToFit() {
         view.layoutSubtreeIfNeeded()
-        let topChrome: CGFloat = 75      // root top → scroll top (header + search + gaps)
-        let bottomPad: CGFloat = 12
+        let topChrome: CGFloat = 88      // root top → scroll top (header + search + roomier gaps)
+        let bottomPad: CGFloat = 16
         let contentArea = contentStack.fittingSize.height + 14   // doc top(4) + bottom(10) insets
         let maxArea: CGFloat = 430
         let h = topChrome + min(maxArea, contentArea) + bottomPad
-        preferredContentSize = NSSize(width: 320, height: max(140, h))
+        preferredContentSize = NSSize(width: 320, height: max(150, h))
     }
 
     override func viewDidAppear() {
