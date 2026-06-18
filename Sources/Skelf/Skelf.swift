@@ -797,13 +797,14 @@ final class GlassCircleButton: NSView {
 }
 
 // Group glass controls into one NSGlassEffectContainerView → a single sampling pass.
-func makeGlassControls(_ circles: [GlassCircleButton], spacing: CGFloat = 6) -> NSView {
+// container.spacing = 0 keeps each control a distinct perfect circle (no liquid merge).
+func makeGlassControls(_ circles: [GlassCircleButton], spacing: CGFloat = 7) -> NSView {
     let row = NSStackView(views: circles)
     row.orientation = .horizontal
     row.spacing = spacing
     row.translatesAutoresizingMaskIntoConstraints = false
     let container = NSGlassEffectContainerView()
-    container.spacing = spacing + 6
+    container.spacing = 0
     container.contentView = row
     container.translatesAutoresizingMaskIntoConstraints = false
     return container
