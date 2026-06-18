@@ -475,6 +475,30 @@ enum Palette {
 
 final class FlippedView: NSView { override var isFlipped: Bool { true } }
 
+// Scale a layer's `transform` around its own centre — avoids anchorPoint juggling
+// inside Auto Layout (settles back to identity, so layout isn't disturbed).
+func centerScale(_ layer: CALayer, _ s: CGFloat) -> CATransform3D {
+    let w = layer.bounds.width, h = layer.bounds.height
+    var t = CATransform3DIdentity
+    t = CATransform3DTranslate(t, w / 2, h / 2, 0)
+    t = CATransform3DScale(t, s, s, 1)
+    t = CATransform3DTranslate(t, -w / 2, -h / 2, 0)
+    return t
+}
+
+// A springy "pop" — squash to `from`, then overshoot back to rest (12-principles squash & stretch).
+func springPop(_ layer: CALayer?, from: CGFloat = 0.9, damping: CGFloat = 11, stiffness: CGFloat = 320, mass: CGFloat = 0.85) {
+    guard let layer = layer, layer.bounds.width > 1 else { return }
+    let a = CASpringAnimation(keyPath: "transform")
+    a.fromValue = centerScale(layer, from)
+    a.toValue = CATransform3DIdentity
+    a.damping = damping
+    a.stiffness = stiffness
+    a.mass = mass
+    a.duration = a.settlingDuration
+    layer.add(a, forKey: "pop")
+}
+
 // A Liquid Glass card whose corners are concentric with their container (macOS 27).
 final class GlassCardView: NSGlassEffectView {
     @available(macOS 27.0, *)
@@ -608,6 +632,8 @@ final class SkillGridItem: NSCollectionViewItem {
     @objc private func starClicked() { onToggleFavorite?() }
     @objc private func menuClicked() { onMenu?(menuButton) }
 
+    func pressPop() { springPop(card.layer, from: 0.93) }
+
     override func mouseEntered(with event: NSEvent) { hovering = true; applyHoverAndBorder(animated: true) }
     override func mouseExited(with event: NSEvent) { hovering = false; applyHoverAndBorder(animated: true) }
 
@@ -719,6 +745,8 @@ final class FolderGridItem: NSCollectionViewItem {
     }
 
     @objc private func menuClicked() { onMenu?(menuButton) }
+
+    func pressPop() { springPop(card.layer, from: 0.93) }
 
     override func mouseEntered(with event: NSEvent) { hovering = true; applyHoverAndBorder(animated: true) }
     override func mouseExited(with event: NSEvent) { hovering = false; applyHoverAndBorder(animated: true) }
@@ -1317,8 +1345,18 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
         detailView.configure(skill, isFavorite: favorites.isFavorite(skill.id))
         detailView.alphaValue = 0
         detailView.isHidden = false
+        detailView.wantsLayer = true
+        // morph in: spring-scale up from the tile while fading (zoom-through feel)
+        if let l = detailView.layer, l.bounds.width > 1 {
+            let spring = CASpringAnimation(keyPath: "transform")
+            spring.fromValue = centerScale(l, 0.96)
+            spring.toValue = CATransform3DIdentity
+            spring.damping = 16; spring.stiffness = 240; spring.mass = 1
+            spring.duration = spring.settlingDuration
+            l.add(spring, forKey: "morph")
+        }
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.18; ctx.allowsImplicitAnimation = true
+            ctx.duration = 0.2; ctx.allowsImplicitAnimation = true
             self.detailView.animator().alphaValue = 1
         }, completionHandler: { [weak self] in
             guard let self = self, self.showingDetail else { return }
@@ -1396,6 +1434,8 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
 
     func collectionView(_ cv: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
         if let ip = indexPaths.first, ip.item < entries.count {
+            (cv.item(at: ip) as? SkillGridItem)?.pressPop()      // squash & stretch on press
+            (cv.item(at: ip) as? FolderGridItem)?.pressPop()
             switch entries[ip.item] {
             case .folder(let node): navigate(to: node.id)
             case .skill(let skill): showDetail(skill)
@@ -2164,12 +2204,14 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         copyBtn.toolTip = "Copy \(skill.initiator)"
         copyBtn.target = copyBtn
         copyBtn.action = #selector(ActionButton.fire)
+        copyBtn.wantsLayer = true
         copyBtn.widthAnchor.constraint(equalToConstant: 24).isActive = true
         copyBtn.heightAnchor.constraint(equalToConstant: 24).isActive = true
         copyBtn.onAction = { [weak self, weak copyBtn] in
             self?.onCopy?(skill)
-            copyBtn?.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Copied")
+            copyBtn?.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Copied")
             copyBtn?.contentTintColor = .systemGreen
+            springPop(copyBtn?.layer, from: 0.4, damping: 10, stiffness: 360)   // the copy confirmation pops, not the menu bar
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 copyBtn?.image = NSImage(systemSymbolName: "square.on.square", accessibilityDescription: "Copy")
                 copyBtn?.contentTintColor = .secondaryLabelColor
@@ -2460,10 +2502,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             ctrl = existing
         } else {
             ctrl = PopoverListController(store: store, favorites: favorites, folders: folders)
-            ctrl.onCopy = { [weak self] skill in
-                self?.copy(skill)
-                self?.flashStatus("✓ \(skill.initiator)")
-            }
+            // No status-item flash — that resized the menu-bar icon and shifted the menu
+            // bar. The copy confirmation animates on the copy icon itself (see skillRow).
+            ctrl.onCopy = { [weak self] skill in self?.copy(skill) }
             ctrl.onOpen = { [weak self] skill in
                 self?.popover.performClose(nil)
                 self?.showWindow()
@@ -2491,17 +2532,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(skill.initiator, forType: .string)
-    }
-
-    private func flashStatus(_ text: String) {
-        guard let button = statusItem.button else { return }
-        let savedImage = button.image
-        button.image = nil
-        button.title = text
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            button.title = ""
-            button.image = savedImage
-        }
     }
 
     private func showWindow() {
