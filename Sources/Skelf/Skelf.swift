@@ -1900,7 +1900,7 @@ final class SkillDetailView: NSView {
             readmeCard.topAnchor.constraint(equalTo: summaryBlock.bottomAnchor, constant: 16),
             readmeCard.leadingAnchor.constraint(equalTo: leftBox.leadingAnchor, constant: 24),
             readmeCard.trailingAnchor.constraint(equalTo: leftBox.trailingAnchor, constant: -22),
-            readmeCard.bottomAnchor.constraint(lessThanOrEqualTo: leftBox.bottomAnchor, constant: -20),
+            readmeCard.bottomAnchor.constraint(equalTo: leftBox.bottomAnchor, constant: -20),   // fills + resizes with the window
 
             hdr.topAnchor.constraint(equalTo: readmeCard.topAnchor),
             hdr.leadingAnchor.constraint(equalTo: readmeCard.leadingAnchor),
@@ -1991,12 +1991,6 @@ final class SkillDetailView: NSView {
             sidebarStack.trailingAnchor.constraint(equalTo: sideDoc.trailingAnchor, constant: -20),
             sidebarStack.bottomAnchor.constraint(lessThanOrEqualTo: sideDoc.bottomAnchor, constant: -24),
         ])
-        // Bottom-align the SKILL.md card with the sidebar so both columns end at the same
-        // height (the reference look); the window-bottom cap above wins if the sidebar would
-        // overflow.
-        let matchSidebar = readmeCard.bottomAnchor.constraint(equalTo: sidebarStack.bottomAnchor)
-        matchSidebar.priority = .defaultHigh
-        matchSidebar.isActive = true
     }
 
     private func card(_ title: String?, _ content: NSView) -> NSView {
@@ -2109,50 +2103,58 @@ final class SkillDetailView: NSView {
         bodyText.scroll(NSPoint(x: 0, y: 0))   // reset scroll to top for the new skill
     }
 
-    // Clicking the banner painting → a native popover with the artwork's details + WHY it
-    // was chosen as this skill's cover.
-    private var paintingPopover: NSPopover?
+    // Clicking the banner painting → a floating panel CENTERED on screen with the full
+    // painting + the artwork's details/history + WHY it was chosen for this skill.
+    private var paintingPanel: NSPanel?
     @objc private func bannerClicked() {
         guard let skill = skill else { return }
-        let W: CGFloat = 500, maxH: CGFloat = 700
+        let W: CGFloat = 540
         let card = paintingCard(skill, width: W)
         card.layoutSubtreeIfNeeded()
-        let h = card.fittingSize.height
-        let popH = min(h, maxH)
+        let h = ceil(card.fittingSize.height)
+        let maxH = (NSScreen.main?.visibleFrame.height ?? 900) - 120
+        let panelH = min(h, maxH)
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: W, height: popH))
-        if h > maxH {                              // tall painting/description → make it scroll
-            let scroll = NSScrollView(frame: container.bounds)
+        let content: NSView
+        if h > maxH {                              // taller than the screen → scroll inside
+            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: W, height: panelH))
             scroll.autoresizingMask = [.width, .height]
             scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
             scroll.drawsBackground = false; scroll.borderType = .noBorder
-            scroll.documentView = card
             card.translatesAutoresizingMaskIntoConstraints = true
-            card.frame = NSRect(x: 0, y: 0, width: W, height: h)
-            card.autoresizingMask = [.width]
-            container.addSubview(scroll)
+            card.frame = NSRect(x: 0, y: 0, width: W, height: h); card.autoresizingMask = [.width]
+            scroll.documentView = card
+            content = scroll
         } else {
-            card.frame = NSRect(x: 0, y: 0, width: W, height: popH)
-            card.autoresizingMask = [.width, .height]
-            container.addSubview(card)
+            card.translatesAutoresizingMaskIntoConstraints = true
+            card.frame = NSRect(x: 0, y: 0, width: W, height: panelH); card.autoresizingMask = [.width, .height]
+            content = card
         }
-        let vc = NSViewController(); vc.view = container
-        let pop = NSPopover()
-        pop.contentViewController = vc
-        pop.behavior = .transient
-        pop.contentSize = NSSize(width: W, height: popH)
-        pop.show(relativeTo: banner.bounds, of: banner, preferredEdge: .maxY)
-        paintingPopover = pop
+
+        let panel = PaintingPanel(contentRect: NSRect(x: 0, y: 0, width: W, height: panelH),
+                                  styleMask: [.titled, .closable, .fullSizeContentView],
+                                  backing: .buffered, defer: false)
+        panel.titlebarAppearsTransparent = true
+        panel.titleVisibility = .hidden
+        panel.isMovableByWindowBackground = true
+        panel.isReleasedWhenClosed = false
+        panel.hasShadow = true
+        panel.contentView = content
+        panel.center()
+        panel.level = .floating
+        panel.makeKeyAndOrderFront(nil)
+        paintingPanel = panel
     }
 
-    // A big card whose painting is FULL-BLEED (fills the popover side-to-side and top),
-    // adapting its height to the artwork's aspect; museum details + history + why sit padded
-    // below.
+    // A big card whose painting is FULL-BLEED at the top (fills width, adapts height to the
+    // art); below it, a clean info block — title, artist, facts, the museum description, and
+    // a highlighted "why this painting" note.
     private func paintingCard(_ skill: Skill, width W: CGFloat) -> NSView {
         let d = ArtStore.shared.details(skill.id)
-        let pad: CGFloat = 18, innerW = W - pad * 2
+        let pad: CGFloat = 22, innerW = W - pad * 2
         let card = NSView()
         card.wantsLayer = true
+        card.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         card.translatesAutoresizingMaskIntoConstraints = false
         card.widthAnchor.constraint(equalToConstant: W).isActive = true
 
@@ -2160,47 +2162,82 @@ final class SkillDetailView: NSView {
         let art = SkillArtView()
         art.showScrim = false
         art.translatesAutoresizingMaskIntoConstraints = false
-        var imgH: CGFloat = min(W * 420 / 320, 460)
+        var imgH: CGFloat = min(W * 420 / 320, 440)
         if let img = ArtStore.shared.cached(skill.id) {
             art.setAvatar(img)
-            if img.size.width > 0 { imgH = min(W * img.size.height / img.size.width, 460) }
+            if img.size.width > 0 { imgH = min(W * img.size.height / img.size.width, 440) }
         } else {
             art.setThemedFallback(skill)
         }
         card.addSubview(art)
 
-        func lbl(_ s: String, _ size: CGFloat, _ w: NSFont.Weight, _ c: NSColor) -> NSTextField {
+        func lbl(_ s: String, _ size: CGFloat, _ w: NSFont.Weight, _ c: NSColor, lineSpacing: CGFloat = 0, width: CGFloat) -> NSTextField {
             let l = NSTextField(wrappingLabelWithString: s)
             l.font = .systemFont(ofSize: size, weight: w); l.textColor = c
             l.translatesAutoresizingMaskIntoConstraints = false
-            l.widthAnchor.constraint(equalToConstant: innerW).isActive = true
+            if lineSpacing > 0 {
+                let p = NSMutableParagraphStyle(); p.lineSpacing = lineSpacing
+                l.attributedStringValue = NSAttributedString(string: s,
+                    attributes: [.font: l.font!, .foregroundColor: c, .paragraphStyle: p])
+            }
+            l.widthAnchor.constraint(equalToConstant: width).isActive = true
             return l
         }
-        let stack = NSStackView()
-        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 6
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(lbl(d?.title ?? "Generated cover art", 17, .bold, .labelColor))
-        if let a = d?.artist, !a.isEmpty { stack.addArrangedSubview(lbl(a, 13.5, .regular, .labelColor)) }
-        let metaParts = [d?.date, d?.origin, d?.medium].compactMap { $0 }.filter { !$0.isEmpty }
-        if !metaParts.isEmpty { stack.addArrangedSubview(lbl(metaParts.joined(separator: " · "), 12, .regular, .secondaryLabelColor)) }
-        if let dim = d?.dimensions, !dim.isEmpty { stack.addArrangedSubview(lbl(dim, 11, .regular, .tertiaryLabelColor)) }
-        if let desc = d?.description, !desc.isEmpty {
-            let dl = lbl(desc, 12.5, .regular, .labelColor.withAlphaComponent(0.85))
-            stack.setCustomSpacing(12, after: stack.arrangedSubviews.last!)
-            stack.addArrangedSubview(dl)
-            stack.setCustomSpacing(14, after: dl)
-        } else {
-            stack.setCustomSpacing(14, after: stack.arrangedSubviews.last!)
+        func sectionHeader(_ s: String, _ c: NSColor = .tertiaryLabelColor) -> NSTextField {
+            let l = NSTextField(labelWithString: s)
+            l.font = .systemFont(ofSize: 10.5, weight: .semibold); l.textColor = c
+            l.translatesAutoresizingMaskIntoConstraints = false
+            return l
         }
-        let divider = NSBox(); divider.boxType = .separator; divider.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(divider)
-        divider.widthAnchor.constraint(equalToConstant: innerW).isActive = true
-        stack.setCustomSpacing(12, after: divider)
-        stack.addArrangedSubview(lbl("WHY THIS PAINTING FOR THIS SKILL", 10.5, .semibold, .tertiaryLabelColor))
+
+        let stack = NSStackView()
+        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        stack.addArrangedSubview(lbl(d?.title ?? "Generated cover art", 19, .bold, .labelColor, width: innerW))
+        if let a = d?.artist, !a.isEmpty {
+            stack.setCustomSpacing(3, after: stack.arrangedSubviews.last!)
+            stack.addArrangedSubview(lbl(a, 14, .regular, .secondaryLabelColor, width: innerW))
+        }
+        let facts = [d?.date, d?.origin, d?.medium, d?.dimensions].compactMap { $0 }.filter { !$0.isEmpty }
+        if !facts.isEmpty {
+            stack.setCustomSpacing(8, after: stack.arrangedSubviews.last!)
+            stack.addArrangedSubview(lbl(facts.joined(separator: " · "), 11.5, .regular, .tertiaryLabelColor, lineSpacing: 2, width: innerW))
+        }
+
+        if let desc = d?.description, !desc.isEmpty {
+            stack.setCustomSpacing(18, after: stack.arrangedSubviews.last!)
+            let ah = sectionHeader("ABOUT THIS PAINTING"); stack.addArrangedSubview(ah)
+            stack.setCustomSpacing(7, after: ah)
+            stack.addArrangedSubview(lbl(desc, 13, .regular, NSColor.labelColor.withAlphaComponent(0.9), lineSpacing: 3, width: innerW))
+        }
+
+        // The "why" sits in a tinted rounded callout so it reads as the key takeaway.
+        let whyBox = NSView()
+        whyBox.wantsLayer = true
+        whyBox.layer?.cornerRadius = 10
+        whyBox.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
+        whyBox.translatesAutoresizingMaskIntoConstraints = false
+        let whyInner = innerW - 28
+        let whyHdr = sectionHeader("WHY THIS PAINTING FOR THIS SKILL", .controlAccentColor)
         let whyText = (d?.why).flatMap { $0.isEmpty ? nil : $0 } ?? "This skill uses a generated cover (no museum painting matched)."
-        stack.addArrangedSubview(lbl(whyText, 13.5, .medium, .labelColor))
-        stack.setCustomSpacing(12, after: stack.arrangedSubviews.last!)
-        stack.addArrangedSubview(lbl(d?.license ?? "Generated artwork", 11, .regular, .tertiaryLabelColor))
+        let whyLbl = lbl(whyText, 13.5, .medium, .labelColor, lineSpacing: 2, width: whyInner)
+        let whyStack = NSStackView(views: [whyHdr, whyLbl])
+        whyStack.orientation = .vertical; whyStack.alignment = .leading; whyStack.spacing = 6
+        whyStack.translatesAutoresizingMaskIntoConstraints = false
+        whyBox.addSubview(whyStack)
+        NSLayoutConstraint.activate([
+            whyStack.topAnchor.constraint(equalTo: whyBox.topAnchor, constant: 12),
+            whyStack.leadingAnchor.constraint(equalTo: whyBox.leadingAnchor, constant: 14),
+            whyStack.trailingAnchor.constraint(equalTo: whyBox.trailingAnchor, constant: -14),
+            whyStack.bottomAnchor.constraint(equalTo: whyBox.bottomAnchor, constant: -12),
+            whyBox.widthAnchor.constraint(equalToConstant: innerW),
+        ])
+        stack.setCustomSpacing(18, after: stack.arrangedSubviews.last!)
+        stack.addArrangedSubview(whyBox)
+
+        stack.setCustomSpacing(12, after: whyBox)
+        stack.addArrangedSubview(lbl(d?.license ?? "Generated artwork", 11, .regular, .quaternaryLabelColor, width: innerW))
 
         card.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -2208,7 +2245,7 @@ final class SkillDetailView: NSView {
             art.leadingAnchor.constraint(equalTo: card.leadingAnchor),
             art.trailingAnchor.constraint(equalTo: card.trailingAnchor),
             art.heightAnchor.constraint(equalToConstant: imgH),
-            stack.topAnchor.constraint(equalTo: art.bottomAnchor, constant: 14),
+            stack.topAnchor.constraint(equalTo: art.bottomAnchor, constant: 18),
             stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: pad),
             stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -pad),
             stack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -pad),
@@ -3006,6 +3043,14 @@ final class ClickableRow: NSView {
             ? NSColor.unemphasizedSelectedContentBackgroundColor.withAlphaComponent(0.7).cgColor
             : NSColor.clear.cgColor
     }
+}
+
+// The centered painting-details panel: takes key focus so it closes on Escape, and on
+// click-away (when it stops being the key window).
+final class PaintingPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override func cancelOperation(_ sender: Any?) { close() }     // Escape
+    override func resignKey() { super.resignKey(); close() }       // clicked outside
 }
 
 // A detached Liquid Glass toast that drops in below the popover with a bounce.
@@ -3861,7 +3906,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             host.sceneBridgingOptions = [.title, .toolbars]
             // Create with an explicit frame, THEN attach the content VC, so the window
             // keeps 760×580 instead of collapsing to the content's fitting size.
-            let defaultSize = NSSize(width: 1200, height: 800)   // spacious 3:2 default (first launch)
+            let defaultSize = NSSize(width: 1200, height: 740)   // first-launch default; columns line up here
             let w = NSWindow(contentRect: NSRect(origin: .zero, size: defaultSize),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
                              backing: .buffered, defer: false)
