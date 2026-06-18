@@ -1002,11 +1002,14 @@ final class SkillArtView: NSView {
         imageLayer.contentsGravity = .resizeAspectFill
         imageLayer.masksToBounds = true
         imageLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        // A strong, FIXED bottom scrim so the name/description stay legible regardless of how
+        // light the painting is (this is applied identically to every card).
         scrim.startPoint = CGPoint(x: 0.5, y: 0.0); scrim.endPoint = CGPoint(x: 0.5, y: 1.0)
-        scrim.colors = [NSColor.black.withAlphaComponent(0.80).cgColor,
-                        NSColor.black.withAlphaComponent(0.14).cgColor,
+        scrim.colors = [NSColor.black.withAlphaComponent(0.92).cgColor,
+                        NSColor.black.withAlphaComponent(0.80).cgColor,
+                        NSColor.black.withAlphaComponent(0.30).cgColor,
                         NSColor.clear.cgColor]
-        scrim.locations = [0.0, 0.5, 1.0]
+        scrim.locations = [0.0, 0.32, 0.58, 1.0]
         layer?.addSublayer(imageLayer)
         layer?.addSublayer(scrim)
     }
