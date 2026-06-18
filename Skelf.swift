@@ -587,243 +587,346 @@ final class GlassCardView: NSGlassEffectView {
 
 // MARK: - Grid tile
 
+// A per-skill "image": a rich diagonal gradient + soft radial light + a large faint
+// monogram subject + a bottom scrim for legible text. Reused by the grid card and the
+// detail header so a skill looks the same wherever it appears.
+final class SkillArtView: NSView {
+    private let base = CAGradientLayer()
+    private let glow = CAGradientLayer()
+    private let mono = CATextLayer()
+    private let scrim = CAGradientLayer()
+    var showSubject = true { didSet { mono.isHidden = !showSubject } }
+    var subjectFraction: CGFloat = 0.62   // monogram size relative to the smaller edge
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        base.startPoint = CGPoint(x: 0.0, y: 1.0); base.endPoint = CGPoint(x: 1.0, y: 0.0)
+        glow.type = .radial
+        glow.colors = [NSColor.white.withAlphaComponent(0.42).cgColor, NSColor.white.withAlphaComponent(0).cgColor]
+        glow.startPoint = CGPoint(x: 0.7, y: 0.8); glow.endPoint = CGPoint(x: 1.35, y: 1.45)
+        mono.alignmentMode = .center
+        mono.foregroundColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        mono.font = NSFont.systemFont(ofSize: 10, weight: .heavy)
+        mono.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        scrim.startPoint = CGPoint(x: 0.5, y: 0.0); scrim.endPoint = CGPoint(x: 0.5, y: 1.0)
+        scrim.colors = [NSColor.black.withAlphaComponent(0.74).cgColor,
+                        NSColor.black.withAlphaComponent(0.10).cgColor,
+                        NSColor.clear.cgColor]
+        scrim.locations = [0.0, 0.46, 1.0]
+        layer?.addSublayer(base)
+        layer?.addSublayer(glow)
+        layer?.addSublayer(mono)
+        layer?.addSublayer(scrim)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        for l in [base, glow, scrim] { l.frame = bounds }
+        let fs = max(40, min(bounds.width, bounds.height) * subjectFraction)
+        mono.fontSize = fs
+        mono.frame = CGRect(x: 0, y: bounds.height * 0.40, width: bounds.width, height: fs * 1.25)
+    }
+
+    func configure(_ name: String, enabled: Bool = true) {
+        base.colors = Palette.gradientColors(name)
+        mono.string = Palette.initials(name)
+        layer?.opacity = enabled ? 1.0 : 0.9
+    }
+}
+
+// MARK: - Grid tile (skill card — image background, à la the product-card reference)
+
 final class SkillGridItem: NSCollectionViewItem {
-    private let card = NSView()
-    private let glyph = NSView()
-    private let initialsLabel = NSTextField(labelWithString: "")
-    private let nameLabel = NSTextField(labelWithString: "")
-    private let metaLabel = NSTextField(labelWithString: "")
+    private let art = SkillArtView()
+    private let favButton = NSButton()
     private let menuButton = NSButton()
-    private let gradient = CAGradientLayer()
+    private let nameLabel = NSTextField(labelWithString: "")
+    private let initiatorBox = NSView()
+    private let initiatorLabel = NSTextField(labelWithString: "")
+    private let descLabel = NSTextField(wrappingLabelWithString: "")
+    private let copyButton = NSButton()
+    private var hovering = false
     var onMenu: ((NSView) -> Void)?
+    var onToggleFavorite: (() -> Void)?
+    var onCopy: (() -> Void)?
+
+    private func styleCircle(_ b: NSButton, _ symbol: String, _ action: Selector) {
+        b.isBordered = false
+        b.wantsLayer = true
+        b.layer?.cornerRadius = 14
+        b.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.34).cgColor
+        b.bezelStyle = .regularSquare
+        b.imageScaling = .scaleProportionallyDown
+        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        b.contentTintColor = .white
+        b.imagePosition = .imageOnly
+        b.focusRingType = .none
+        b.target = self
+        b.action = action
+        b.translatesAutoresizingMaskIntoConstraints = false
+    }
 
     override func loadView() {
         let root = NSView()
-        card.wantsLayer = true
-        card.layer?.cornerRadius = 12
-        card.layer?.borderWidth = 1
-        card.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(card)
+        art.translatesAutoresizingMaskIntoConstraints = false
+        art.layer?.cornerRadius = 22
+        art.subjectFraction = 0.5
+        root.addSubview(art)
 
-        glyph.wantsLayer = true
-        glyph.translatesAutoresizingMaskIntoConstraints = false
-        gradient.frame = CGRect(x: 0, y: 0, width: 52, height: 52)
-        gradient.cornerRadius = 13
-        gradient.startPoint = CGPoint(x: 0, y: 0)
-        gradient.endPoint = CGPoint(x: 1, y: 1)
-        glyph.layer?.addSublayer(gradient)
-        card.addSubview(glyph)
+        styleCircle(favButton, "star", #selector(favClicked))
+        styleCircle(menuButton, "ellipsis", #selector(menuClicked))
+        let controls = NSStackView(views: [favButton, menuButton])
+        controls.orientation = .horizontal
+        controls.spacing = 6
+        controls.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(controls)
 
-        initialsLabel.font = .systemFont(ofSize: 19, weight: .bold)
-        initialsLabel.textColor = .white
-        initialsLabel.alignment = .center
-        initialsLabel.translatesAutoresizingMaskIntoConstraints = false
-        glyph.addSubview(initialsLabel)
-
-        nameLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        nameLabel.alignment = .center
+        nameLabel.font = .systemFont(ofSize: 17, weight: .bold)
+        nameLabel.textColor = .white
         nameLabel.lineBreakMode = .byTruncatingTail
-        nameLabel.maximumNumberOfLines = 2
-        nameLabel.cell?.usesSingleLineMode = false
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(nameLabel)
+        root.addSubview(nameLabel)
 
-        metaLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-        metaLabel.textColor = .secondaryLabelColor
-        metaLabel.alignment = .center
-        metaLabel.lineBreakMode = .byTruncatingTail
-        metaLabel.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(metaLabel)
+        initiatorBox.wantsLayer = true
+        initiatorBox.layer?.cornerRadius = 11
+        initiatorBox.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.44).cgColor
+        initiatorBox.translatesAutoresizingMaskIntoConstraints = false
+        initiatorLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        initiatorLabel.textColor = .white
+        initiatorLabel.lineBreakMode = .byTruncatingTail
+        initiatorLabel.translatesAutoresizingMaskIntoConstraints = false
+        initiatorBox.addSubview(initiatorLabel)
+        root.addSubview(initiatorBox)
 
-        menuButton.isBordered = false
-        menuButton.bezelStyle = .regularSquare
-        menuButton.imageScaling = .scaleProportionallyDown
-        menuButton.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "More")
-        menuButton.contentTintColor = .tertiaryLabelColor
-        menuButton.focusRingType = .none
-        menuButton.target = self
-        menuButton.action = #selector(menuClicked)
-        menuButton.toolTip = "Organize (move, copy, …)"
-        menuButton.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(menuButton)
+        descLabel.font = .systemFont(ofSize: 12)
+        descLabel.textColor = NSColor.white.withAlphaComponent(0.82)
+        descLabel.maximumNumberOfLines = 2
+        descLabel.lineBreakMode = .byTruncatingTail
+        descLabel.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(descLabel)
+
+        copyButton.isBordered = false
+        copyButton.wantsLayer = true
+        copyButton.layer?.cornerRadius = 19
+        copyButton.layer?.backgroundColor = NSColor.white.cgColor
+        copyButton.bezelStyle = .regularSquare
+        copyButton.target = self
+        copyButton.action = #selector(copyClicked)
+        copyButton.translatesAutoresizingMaskIntoConstraints = false
+        setCopyTitle("Copy")
+        root.addSubview(copyButton)
 
         NSLayoutConstraint.activate([
-            card.topAnchor.constraint(equalTo: root.topAnchor),
-            card.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            card.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            card.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            glyph.topAnchor.constraint(equalTo: card.topAnchor, constant: 16),
-            glyph.centerXAnchor.constraint(equalTo: card.centerXAnchor),
-            glyph.widthAnchor.constraint(equalToConstant: 52),
-            glyph.heightAnchor.constraint(equalToConstant: 52),
-            initialsLabel.centerXAnchor.constraint(equalTo: glyph.centerXAnchor),
-            initialsLabel.centerYAnchor.constraint(equalTo: glyph.centerYAnchor),
-            nameLabel.topAnchor.constraint(equalTo: glyph.bottomAnchor, constant: 10),
-            nameLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 7),
-            nameLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -7),
-            metaLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 3),
-            metaLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 6),
-            metaLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -6),
-            menuButton.topAnchor.constraint(equalTo: card.topAnchor, constant: 6),
-            menuButton.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -6),
-            menuButton.widthAnchor.constraint(equalToConstant: 18),
-            menuButton.heightAnchor.constraint(equalToConstant: 18),
+            art.topAnchor.constraint(equalTo: root.topAnchor),
+            art.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            art.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            art.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+
+            controls.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
+            controls.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
+            favButton.widthAnchor.constraint(equalToConstant: 28),
+            favButton.heightAnchor.constraint(equalToConstant: 28),
+            menuButton.widthAnchor.constraint(equalToConstant: 28),
+            menuButton.heightAnchor.constraint(equalToConstant: 28),
+
+            copyButton.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            copyButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            copyButton.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
+            copyButton.heightAnchor.constraint(equalToConstant: 40),
+
+            descLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            descLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            descLabel.bottomAnchor.constraint(equalTo: copyButton.topAnchor, constant: -10),
+
+            nameLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            nameLabel.bottomAnchor.constraint(equalTo: descLabel.topAnchor, constant: -6),
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: initiatorBox.leadingAnchor, constant: -8),
+
+            initiatorBox.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            initiatorBox.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
+            initiatorBox.heightAnchor.constraint(equalToConstant: 22),
+            initiatorBox.widthAnchor.constraint(lessThanOrEqualToConstant: 104),
+            initiatorLabel.leadingAnchor.constraint(equalTo: initiatorBox.leadingAnchor, constant: 9),
+            initiatorLabel.trailingAnchor.constraint(equalTo: initiatorBox.trailingAnchor, constant: -9),
+            initiatorLabel.centerYAnchor.constraint(equalTo: initiatorBox.centerYAnchor),
         ])
+        nameLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        initiatorBox.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        initiatorLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         root.addTrackingArea(NSTrackingArea(rect: .zero,
             options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self, userInfo: nil))
         view = root
     }
 
-    private var hovering = false
+    private func setCopyTitle(_ s: String) {
+        copyButton.attributedTitle = NSAttributedString(string: s,
+            attributes: [.foregroundColor: NSColor.black, .font: NSFont.systemFont(ofSize: 14, weight: .bold)])
+    }
 
     func configure(_ skill: Skill, isFavorite: Bool) {
-        initialsLabel.stringValue = Palette.initials(skill.name)
+        art.configure(skill.name, enabled: skill.enabled)
         nameLabel.stringValue = skill.name
-        let star = isFavorite ? "★ " : ""
-        metaLabel.stringValue = skill.enabled ? "\(star)\(skill.initiator)" : "\(star)\(skill.initiator) · off"
-        gradient.colors = Palette.gradientColors(skill.name)
-        hovering = false
-        applyHoverAndBorder(animated: false)
-        view.alphaValue = skill.enabled ? 1.0 : 0.55
+        initiatorLabel.stringValue = skill.enabled ? skill.category : "off"
+        initiatorBox.layer?.backgroundColor = (skill.enabled ? NSColor.black.withAlphaComponent(0.44)
+                                                             : NSColor.systemRed.withAlphaComponent(0.55)).cgColor
+        descLabel.stringValue = skill.description.isEmpty ? "No description in SKILL.md." : skill.description
+        favButton.image = NSImage(systemSymbolName: isFavorite ? "star.fill" : "star",
+                                  accessibilityDescription: isFavorite ? "Favorited" : "Favorite")
+        favButton.contentTintColor = isFavorite ? .systemYellow : .white
+        setCopyTitle("Copy")
+        view.alphaValue = skill.enabled ? 1.0 : 0.6
         view.toolTip = "\(skill.initiator)\n\n\(skill.description)"
     }
 
+    @objc private func favClicked() { onToggleFavorite?() }
     @objc private func menuClicked() { onMenu?(menuButton) }
-
-    func pressPop() { springPop(card.layer, from: 0.93) }
-
-    override func mouseEntered(with event: NSEvent) { hovering = true; applyHoverAndBorder(animated: true) }
-    override func mouseExited(with event: NSEvent) { hovering = false; applyHoverAndBorder(animated: true) }
-
-    private func applyHoverAndBorder(animated: Bool) {
-        let apply = {
-            self.card.layer?.backgroundColor = (self.hovering
-                ? NSColor.unemphasizedSelectedContentBackgroundColor.withAlphaComponent(0.55)
-                : NSColor.controlBackgroundColor).cgColor
-            let border: NSColor = self.isSelected ? .controlAccentColor
-                : (self.hovering ? NSColor.controlAccentColor.withAlphaComponent(0.5) : .separatorColor)
-            self.card.layer?.borderColor = border.cgColor
-            self.card.layer?.borderWidth = self.isSelected ? 2 : 1
-        }
-        if animated {
-            NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.13; ctx.allowsImplicitAnimation = true; apply() }
-        } else { apply() }
+    @objc private func copyClicked() {
+        onCopy?()
+        springPop(copyButton.layer, from: 0.9)
+        setCopyTitle("Copied ✓")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak self] in self?.setCopyTitle("Copy") }
     }
-    override var isSelected: Bool { didSet { applyHoverAndBorder(animated: true) } }
+
+    func pressPop() { springPop(art.layer, from: 0.96) }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true; applyHover() }
+    override func mouseExited(with event: NSEvent) { hovering = false; applyHover() }
+    private func applyHover() {
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.14; ctx.allowsImplicitAnimation = true
+            self.art.layer?.transform = self.hovering
+                ? CATransform3DScale(CATransform3DIdentity, 1.02, 1.02, 1) : CATransform3DIdentity
+        }
+    }
+    override var isSelected: Bool {
+        didSet {
+            art.layer?.borderColor = NSColor.white.withAlphaComponent(0.9).cgColor
+            art.layer?.borderWidth = isSelected ? 2 : 0
+        }
+    }
 }
 
-// MARK: - Folder tile
+// MARK: - Folder tile (same card shape, folder treatment)
 
 final class FolderGridItem: NSCollectionViewItem {
-    private let card = NSView()
+    private let art = SkillArtView()
     private let icon = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let countLabel = NSTextField(labelWithString: "")
     private let menuButton = NSButton()
+    private let barBadge = NSImageView()
+    private var hovering = false
     var onMenu: ((NSView) -> Void)?
 
     override func loadView() {
         let root = NSView()
-        card.wantsLayer = true
-        card.layer?.cornerRadius = 12
-        card.layer?.borderWidth = 1
-        card.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(card)
+        art.translatesAutoresizingMaskIntoConstraints = false
+        art.layer?.cornerRadius = 22
+        art.showSubject = false
+        root.addSubview(art)
 
         icon.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: "Folder")
-        icon.contentTintColor = .controlAccentColor
+        icon.contentTintColor = NSColor.white.withAlphaComponent(0.92)
         icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 54, weight: .semibold)
         icon.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(icon)
+        root.addSubview(icon)
 
         menuButton.isBordered = false
+        menuButton.wantsLayer = true
+        menuButton.layer?.cornerRadius = 14
+        menuButton.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.34).cgColor
         menuButton.bezelStyle = .regularSquare
         menuButton.imageScaling = .scaleProportionallyDown
-        menuButton.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "More")
-        menuButton.contentTintColor = .tertiaryLabelColor
+        menuButton.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "More")
+        menuButton.contentTintColor = .white
         menuButton.focusRingType = .none
         menuButton.target = self
         menuButton.action = #selector(menuClicked)
-        menuButton.toolTip = "Folder options (rename, move, …)"
         menuButton.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(menuButton)
+        root.addSubview(menuButton)
 
-        nameLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        nameLabel.alignment = .center
+        barBadge.image = NSImage(systemSymbolName: "menubar.rectangle", accessibilityDescription: "In menu bar")
+        barBadge.contentTintColor = .white
+        barBadge.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        barBadge.translatesAutoresizingMaskIntoConstraints = false
+        barBadge.isHidden = true
+        root.addSubview(barBadge)
+
+        nameLabel.font = .systemFont(ofSize: 17, weight: .bold)
+        nameLabel.textColor = .white
         nameLabel.lineBreakMode = .byTruncatingTail
-        nameLabel.maximumNumberOfLines = 2
-        nameLabel.cell?.usesSingleLineMode = false
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(nameLabel)
+        root.addSubview(nameLabel)
 
-        countLabel.font = .systemFont(ofSize: 10)
-        countLabel.textColor = .secondaryLabelColor
-        countLabel.alignment = .center
+        countLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        countLabel.textColor = NSColor.white.withAlphaComponent(0.8)
         countLabel.lineBreakMode = .byTruncatingTail
         countLabel.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(countLabel)
+        root.addSubview(countLabel)
 
         NSLayoutConstraint.activate([
-            card.topAnchor.constraint(equalTo: root.topAnchor),
-            card.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            card.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            card.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            icon.topAnchor.constraint(equalTo: card.topAnchor, constant: 18),
-            icon.centerXAnchor.constraint(equalTo: card.centerXAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 46),
-            icon.heightAnchor.constraint(equalToConstant: 46),
-            nameLabel.topAnchor.constraint(equalTo: icon.bottomAnchor, constant: 10),
-            nameLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 7),
-            nameLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -7),
-            countLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 3),
-            countLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 6),
-            countLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -6),
-            menuButton.topAnchor.constraint(equalTo: card.topAnchor, constant: 6),
-            menuButton.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -6),
-            menuButton.widthAnchor.constraint(equalToConstant: 18),
-            menuButton.heightAnchor.constraint(equalToConstant: 18),
+            art.topAnchor.constraint(equalTo: root.topAnchor),
+            art.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            art.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            art.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+
+            icon.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            icon.centerYAnchor.constraint(equalTo: root.centerYAnchor, constant: -18),
+
+            menuButton.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
+            menuButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
+            menuButton.widthAnchor.constraint(equalToConstant: 28),
+            menuButton.heightAnchor.constraint(equalToConstant: 28),
+
+            barBadge.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
+            barBadge.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+
+            countLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            countLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            countLabel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
+            nameLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            nameLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            nameLabel.bottomAnchor.constraint(equalTo: countLabel.topAnchor, constant: -4),
         ])
         root.addTrackingArea(NSTrackingArea(rect: .zero,
             options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self, userInfo: nil))
         view = root
     }
 
-    private var hovering = false
-
-    func configure(_ node: FolderStore.Node) {
+    func configure(_ node: FolderStore.Node, inMenuBar: Bool) {
+        art.configure(node.name, enabled: true)
         nameLabel.stringValue = node.name
         let s = node.skills.count, f = node.folders.count
         var parts: [String] = []
         if f > 0 { parts.append("\(f) folder\(f == 1 ? "" : "s")") }
         parts.append("\(s) skill\(s == 1 ? "" : "s")")
         countLabel.stringValue = parts.joined(separator: " · ")
-        hovering = false
-        applyHoverAndBorder(animated: false)
+        barBadge.isHidden = !inMenuBar
         view.toolTip = node.name
     }
 
     @objc private func menuClicked() { onMenu?(menuButton) }
+    func pressPop() { springPop(art.layer, from: 0.96) }
 
-    func pressPop() { springPop(card.layer, from: 0.93) }
-
-    override func mouseEntered(with event: NSEvent) { hovering = true; applyHoverAndBorder(animated: true) }
-    override func mouseExited(with event: NSEvent) { hovering = false; applyHoverAndBorder(animated: true) }
-
-    private func applyHoverAndBorder(animated: Bool) {
-        let apply = {
-            self.card.layer?.backgroundColor = (self.hovering
-                ? NSColor.unemphasizedSelectedContentBackgroundColor.withAlphaComponent(0.55)
-                : NSColor.controlBackgroundColor).cgColor
-            let border: NSColor = self.isSelected ? .controlAccentColor
-                : (self.hovering ? NSColor.controlAccentColor.withAlphaComponent(0.5) : .separatorColor)
-            self.card.layer?.borderColor = border.cgColor
-            self.card.layer?.borderWidth = self.isSelected ? 2 : 1
+    override func mouseEntered(with event: NSEvent) { hovering = true; applyHover() }
+    override func mouseExited(with event: NSEvent) { hovering = false; applyHover() }
+    private func applyHover() {
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.14; ctx.allowsImplicitAnimation = true
+            self.art.layer?.transform = self.hovering
+                ? CATransform3DScale(CATransform3DIdentity, 1.02, 1.02, 1) : CATransform3DIdentity
         }
-        if animated {
-            NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.13; ctx.allowsImplicitAnimation = true; apply() }
-        } else { apply() }
     }
-    override var isSelected: Bool { didSet { applyHoverAndBorder(animated: true) } }
+    override var isSelected: Bool {
+        didSet {
+            art.layer?.borderColor = NSColor.white.withAlphaComponent(0.9).cgColor
+            art.layer?.borderWidth = isSelected ? 2 : 0
+        }
+    }
 }
 
 // MARK: - Detail screen
@@ -1377,10 +1480,10 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
         root.addSubview(gridScroll)
 
         let layout = NSCollectionViewFlowLayout()
-        layout.itemSize = NSSize(width: 150, height: 132)
-        layout.minimumInteritemSpacing = 14
-        layout.minimumLineSpacing = 16
-        layout.sectionInset = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
+        layout.itemSize = NSSize(width: 224, height: 298)
+        layout.minimumInteritemSpacing = 16
+        layout.minimumLineSpacing = 18
+        layout.sectionInset = NSEdgeInsets(top: 18, left: 20, bottom: 18, right: 20)
         collectionView.collectionViewLayout = layout
         collectionView.dataSource = self
         collectionView.delegate = self
@@ -1454,7 +1557,7 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
         case .folder(let node):
             let item = cv.makeItem(withIdentifier: folderItemID, for: indexPath)
             if let folder = item as? FolderGridItem {
-                folder.configure(node)
+                folder.configure(node, inMenuBar: model.folders.showsInMenuBar(node.id))
                 folder.onMenu = { [weak self] anchor in
                     guard let self = self else { return }
                     self.popMenu(self.folderMenu(node), at: anchor)
@@ -1466,6 +1569,8 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
             let item = cv.makeItem(withIdentifier: skillItemID, for: indexPath)
             if let grid = item as? SkillGridItem {
                 grid.configure(skill, isFavorite: model.favorites.isFavorite(skill.id))
+                grid.onToggleFavorite = { [weak self] in self?.model.favorites.toggle(skill.id) }
+                grid.onCopy = { [weak self] in self?.model.copySkill(skill) }
                 grid.onMenu = { [weak self] anchor in
                     guard let self = self else { return }
                     self.popMenu(self.skillMenu(skill), at: anchor)
