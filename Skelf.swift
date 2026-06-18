@@ -499,6 +499,30 @@ func springPop(_ layer: CALayer?, from: CGFloat = 0.9, damping: CGFloat = 11, st
     layer.add(a, forKey: "pop")
 }
 
+// Subtle UI sounds, gated behind a setting (off by default). Uses built-in system sounds.
+enum Sound {
+    static var enabled = UserDefaults.standard.bool(forKey: "soundEnabled")   // default false
+    private static var cache: [String: NSSound] = [:]
+
+    static func setEnabled(_ on: Bool) {
+        enabled = on
+        UserDefaults.standard.set(on, forKey: "soundEnabled")
+        if on { play(.copy) }   // a preview when you switch it on
+    }
+
+    enum Cue: String { case copy = "Tink", move = "Pop" }
+
+    static func play(_ cue: Cue, volume: Float = 0.4) {
+        guard enabled else { return }
+        let s = cache[cue.rawValue] ?? NSSound(named: NSSound.Name(cue.rawValue))
+        cache[cue.rawValue] = s
+        s?.volume = volume
+        if s?.isPlaying == true { s?.stop() }
+        s?.currentTime = 0
+        s?.play()
+    }
+}
+
 // A Liquid Glass card whose corners are concentric with their container (macOS 27).
 final class GlassCardView: NSGlassEffectView {
     @available(macOS 27.0, *)
@@ -1297,6 +1321,7 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
         } else {
             folders.moveSkill(comps[1], from: currentFolderId, to: folderId)
         }
+        Sound.play(.move)
         return true
     }
 
@@ -1488,12 +1513,14 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
         if dropOperation == .on, indexPath.item < entries.count, case .folder(let target) = entries[indexPath.item] {
             if isFolder { folders.moveFolder(draggedId, to: target.id) }
             else { folders.moveSkill(draggedId, from: currentFolderId, to: target.id) }
+            Sound.play(.move)
             return true
         }
         // reorder within the current folder, inserting before the next same-kind item
         let anchor = anchorId(forKind: isFolder, atEntryIndex: indexPath.item)
         if isFolder { folders.reorderFolder(draggedId, in: currentFolderId, before: anchor) }
         else { folders.reorderSkill(draggedId, in: currentFolderId, before: anchor) }
+        Sound.play(.move)
         return true
     }
 
@@ -2257,6 +2284,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
             folders.moveSkill(comps[1], from: currentId, to: folderId)
             showToast("Moved \(name) → \(folderName)")
         }
+        Sound.play(.move)
         return true
     }
 
@@ -2341,6 +2369,9 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         let refresh = NSMenuItem(title: "Refresh Skills", action: #selector(refreshTapped), keyEquivalent: "r")
         refresh.target = self; menu.addItem(refresh)
         menu.addItem(.separator())
+        let sounds = NSMenuItem(title: "Play Sounds", action: #selector(toggleSounds), keyEquivalent: "")
+        sounds.target = self; sounds.state = Sound.enabled ? .on : .off; menu.addItem(sounds)
+        menu.addItem(.separator())
         let about = NSMenuItem(title: "About Skelf", action: #selector(aboutTapped), keyEquivalent: "")
         about.target = self; menu.addItem(about)
         menu.addItem(.separator())
@@ -2349,6 +2380,8 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     }
 
     @objc private func refreshTapped() { onRefresh?() }
+
+    @objc private func toggleSounds() { Sound.setEnabled(!Sound.enabled) }
 
     @objc private func aboutTapped() {
         let a = NSAlert()
@@ -2532,6 +2565,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(skill.initiator, forType: .string)
+        Sound.play(.copy)
     }
 
     private func showWindow() {
