@@ -985,9 +985,11 @@ final class SkillGridItem: NSCollectionViewItem {
             attributes: [.foregroundColor: NSColor.black, .font: NSFont.systemFont(ofSize: 14, weight: .bold)])
     }
 
-    func configure(_ skill: Skill, isFavorite: Bool) {
+    func configure(_ skill: Skill, isFavorite: Bool, verified: Bool) {
         skillId = skill.id
-        let creator = skill.source.contains("/") ? skill.source.split(separator: "/").first.map(String.init) : nil
+        // Only show the creator's avatar once the skill's page is verified to belong to
+        // them — unverified/removed skills fall back to the generated gradient.
+        let creator = (verified && skill.source.contains("/")) ? skill.source.split(separator: "/").first.map(String.init) : nil
         artKey = creator ?? ("grad:" + skill.name)
         if let creator = creator, let img = AvatarStore.shared.cached(creator) {
             art.setAvatar(img)
@@ -1870,18 +1872,64 @@ final class GridCollectionView: NSCollectionView {
 }
 
 // A flow layout that sizes cards to FILL each row evenly (justified) for a target
-// column width, at any window width — no ragged right-hand gap.
+// column width, recomputed live as the window resizes (shouldInvalidateLayout) so the
+// cards stretch instantly — no ragged right-hand gap, no fixed size.
+final class CardFlowLayout: NSCollectionViewFlowLayout {
+    var targetWidth: CGFloat = 232
+    override init() {
+        super.init()
+        itemSize = NSSize(width: 224, height: 300)
+        minimumInteritemSpacing = 18
+        minimumLineSpacing = 20
+        sectionInset = NSEdgeInsets(top: 6, left: 22, bottom: 18, right: 22)
+        headerReferenceSize = NSSize(width: 0, height: 30)
+    }
+    required init?(coder: NSCoder) { super.init(coder: coder) }
+    override func prepare() {
+        if let cv = collectionView, cv.bounds.width > 1 {
+            let avail = cv.bounds.width - sectionInset.left - sectionInset.right
+            let cols = max(1, floor((avail + minimumInteritemSpacing) / (targetWidth + minimumInteritemSpacing)))
+            let w = floor((avail - (cols - 1) * minimumInteritemSpacing) / cols)
+            itemSize = NSSize(width: max(150, w), height: floor(max(150, w) * 300.0 / 224.0))
+        }
+        super.prepare()
+    }
+    override func shouldInvalidateLayout(forBoundsChange newBounds: NSRect) -> Bool {
+        if let cv = collectionView, newBounds.width != cv.bounds.width { return true }
+        return super.shouldInvalidateLayout(forBoundsChange: newBounds)
+    }
+}
+
+// A section header ("Folders" / "Skills" / "Off Skills") above each grid group.
+final class SectionHeaderView: NSView {
+    static let id = NSUserInterfaceItemIdentifier("SectionHeader")
+    let label = NSTextField(labelWithString: "")
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .secondaryLabelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -7),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+}
+
 // The grid for ONE folder. Navigation + toolbar live in SwiftUI; this renders the
-// folder's entries, handles drag/drop/reorder + per-tile menus, and reports clicks.
-final class GridViewController: NSViewController, NSCollectionViewDataSource, NSCollectionViewDelegate {
+// folder's entries in 3 sections (Folders / Skills / Off Skills), handles
+// drag/drop/reorder + per-tile menus, and reports clicks.
+final class GridViewController: NSViewController, NSCollectionViewDataSource,
+                                NSCollectionViewDelegate, NSCollectionViewDelegateFlowLayout {
     let model: SkelfModel
     var folderId: String
     var onOpenSkill: ((String) -> Void)?
     var onOpenFolder: ((String) -> Void)?
 
-    private var entries: [GridEntry] = []
+    private var sections: [(title: String, items: [GridEntry])] = []
     private var query = ""
-    private var filterMode = 0
     private var lastToken = -1
 
     private let collectionView = GridCollectionView()
@@ -1904,12 +1952,7 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
         gridScroll.drawsBackground = false
         root.addSubview(gridScroll)
 
-        let layout = NSCollectionViewFlowLayout()
-        layout.itemSize = NSSize(width: 224, height: 300)
-        layout.minimumInteritemSpacing = 18
-        layout.minimumLineSpacing = 20
-        layout.sectionInset = NSEdgeInsets(top: 20, left: 22, bottom: 24, right: 22)
-        collectionView.collectionViewLayout = layout
+        collectionView.collectionViewLayout = CardFlowLayout()
         collectionView.dataSource = self
         collectionView.delegate = self
         collectionView.isSelectable = true
@@ -1917,6 +1960,9 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
         collectionView.backgroundColors = [.clear]
         collectionView.register(SkillGridItem.self, forItemWithIdentifier: skillItemID)
         collectionView.register(FolderGridItem.self, forItemWithIdentifier: folderItemID)
+        collectionView.register(SectionHeaderView.self,
+                                forSupplementaryViewOfKind: NSCollectionView.elementKindSectionHeader,
+                                withIdentifier: SectionHeaderView.id)
         collectionView.registerForDraggedTypes([skelfEntryType])
         collectionView.setDraggingSourceOperationMask(.move, forLocal: true)
         collectionView.onActivate = { [weak self] ip in self?.activate(ip) }
@@ -1933,23 +1979,11 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
 
     override func viewDidLoad() { super.viewDidLoad(); reload() }
 
-    // Size cards to fill each row evenly for the current width (justified, responsive).
-    override func viewDidLayout() {
-        super.viewDidLayout()
-        guard let layout = collectionView.collectionViewLayout as? NSCollectionViewFlowLayout else { return }
-        let avail = collectionView.bounds.width - layout.sectionInset.left - layout.sectionInset.right
-        guard avail > 1 else { return }
-        let target: CGFloat = 232, gap = layout.minimumInteritemSpacing
-        let cols = max(1, floor((avail + gap) / (target + gap)))
-        let w = floor((avail - (cols - 1) * gap) / cols)
-        let size = NSSize(width: max(150, w), height: floor(max(150, w) * 300.0 / 224.0))
-        if layout.itemSize != size { layout.itemSize = size; layout.invalidateLayout() }
-    }
-
-    /// Called by the SwiftUI host whenever search / filter / data changes.
+    /// Called by the SwiftUI host whenever search / data changes. (CardFlowLayout
+    /// handles responsive resizing itself, live, via shouldInvalidateLayout.)
     func apply(query: String, filter: Int, token: Int) {
-        guard query != self.query || filter != filterMode || token != lastToken else { return }
-        self.query = query; self.filterMode = filter; lastToken = token
+        guard query != self.query || token != lastToken else { return }
+        self.query = query; lastToken = token
         if isViewLoaded { reload() }
     }
 
@@ -1964,43 +1998,63 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
         }
     }
 
+    private func skillMatches(_ s: Skill, _ q: String) -> Bool {
+        q.isEmpty || s.name.lowercased().contains(q) || s.description.lowercased().contains(q)
+            || s.category.lowercased().contains(q) || s.source.lowercased().contains(q)
+    }
+    private func skillVerified(_ s: Skill) -> Bool {
+        guard let u = s.skillGithubURL?.absoluteString else { return false }
+        return GitHubVerifier.shared.status(u) == true
+    }
+
     private func buildEntries() {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        var e: [GridEntry] = []
-        for f in model.folders.childFolders(of: folderId) where q.isEmpty || f.name.lowercased().contains(q) {
-            e.append(.folder(f))
-        }
+        let folders = model.folders.childFolders(of: folderId).filter { q.isEmpty || $0.name.lowercased().contains(q) }
         let here = model.folders.skillIds(in: folderId).compactMap { id in model.store.skills.first { $0.id == id } }
-        let matched = here.filter { s in
-            let passFilter = filterMode == 0 || (filterMode == 1 && s.enabled) || (filterMode == 2 && !s.enabled)
-            let passQuery = q.isEmpty
-                || s.name.lowercased().contains(q)
-                || s.description.lowercased().contains(q)
-                || s.category.lowercased().contains(q)
-                || s.source.lowercased().contains(q)
-            return passFilter && passQuery
-        }
-        for s in matched { e.append(.skill(s)) }   // keep the folder's stored order; favoriting never reorders
-        entries = e
+        let skills = here.filter { $0.enabled && skillMatches($0, q) }     // stored order; favoriting never reorders
+        let off = here.filter { !$0.enabled && skillMatches($0, q) }
+        var s: [(title: String, items: [GridEntry])] = []
+        if !folders.isEmpty { s.append(("Folders", folders.map { .folder($0) })) }
+        if !skills.isEmpty { s.append(("Skills", skills.map { .skill($0) })) }
+        if !off.isEmpty { s.append(("Off Skills", off.map { .skill($0) })) }
+        sections = s
+    }
+
+    private func entry(at ip: IndexPath) -> GridEntry? {
+        guard ip.section < sections.count, ip.item < sections[ip.section].items.count else { return nil }
+        return sections[ip.section].items[ip.item]
     }
 
     private func activate(_ ip: IndexPath) {
-        guard ip.item < entries.count else { return }
-        switch entries[ip.item] {
+        switch entry(at: ip) {
         case .folder(let n): (collectionView.item(at: ip) as? FolderGridItem)?.pressPop(); onOpenFolder?(n.id)
         case .skill(let s): (collectionView.item(at: ip) as? SkillGridItem)?.pressPop(); onOpenSkill?(s.id)
+        case .none: break
         }
         collectionView.deselectAll(nil)
     }
 
     // --- collection data ---
-    func collectionView(_ cv: NSCollectionView, numberOfItemsInSection section: Int) -> Int { entries.count }
+    func numberOfSections(in cv: NSCollectionView) -> Int { sections.count }
+    func collectionView(_ cv: NSCollectionView, numberOfItemsInSection section: Int) -> Int {
+        section < sections.count ? sections[section].items.count : 0
+    }
+
+    func collectionView(_ cv: NSCollectionView, viewForSupplementaryElementOfKind kind: NSCollectionView.SupplementaryElementKind,
+                        at indexPath: IndexPath) -> NSView {
+        let v = cv.makeSupplementaryView(ofKind: kind, withIdentifier: SectionHeaderView.id, for: indexPath)
+        if let h = v as? SectionHeaderView, indexPath.section < sections.count {
+            h.label.stringValue = sections[indexPath.section].title.uppercased()
+        }
+        return v
+    }
+    func collectionView(_ cv: NSCollectionView, layout: NSCollectionViewLayout,
+                        referenceSizeForHeaderInSection section: Int) -> NSSize {
+        NSSize(width: cv.bounds.width, height: 30)
+    }
 
     func collectionView(_ cv: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
-        guard indexPath.item < entries.count else {
-            return cv.makeItem(withIdentifier: skillItemID, for: indexPath)
-        }
-        switch entries[indexPath.item] {
+        switch entry(at: indexPath) {
         case .folder(let node):
             let item = cv.makeItem(withIdentifier: folderItemID, for: indexPath)
             if let folder = item as? FolderGridItem {
@@ -2015,7 +2069,7 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
         case .skill(let skill):
             let item = cv.makeItem(withIdentifier: skillItemID, for: indexPath)
             if let grid = item as? SkillGridItem {
-                grid.configure(skill, isFavorite: model.favorites.isFavorite(skill.id))
+                grid.configure(skill, isFavorite: model.favorites.isFavorite(skill.id), verified: skillVerified(skill))
                 grid.onToggleFavorite = { [weak self] in self?.model.favorites.toggle(skill.id) }
                 grid.onCopy = { [weak self] in self?.model.copySkill(skill) }
                 grid.onMenu = { [weak self] anchor in
@@ -2025,6 +2079,8 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
             }
             item.view.menu = skillMenu(skill)
             return item
+        case .none:
+            return cv.makeItem(withIdentifier: skillItemID, for: indexPath)
         }
     }
 
@@ -2034,13 +2090,13 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
 
     // --- drag & drop / reorder ---
     func collectionView(_ cv: NSCollectionView, canDragItemsAt indexPaths: Set<IndexPath>, with event: NSEvent) -> Bool {
-        return query.trimmingCharacters(in: .whitespaces).isEmpty && filterMode == 0
+        return query.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     func collectionView(_ cv: NSCollectionView, pasteboardWriterForItemAt indexPath: IndexPath) -> NSPasteboardWriting? {
-        guard indexPath.item < entries.count else { return nil }
+        guard let e = entry(at: indexPath) else { return nil }
         let item = NSPasteboardItem()
-        switch entries[indexPath.item] {
+        switch e {
         case .folder(let n): item.setString("folder:\(n.id)", forType: skelfEntryType)
         case .skill(let s): item.setString("skill:\(s.id)", forType: skelfEntryType)
         }
@@ -2053,9 +2109,7 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
                         dropOperation proposedDropOperation: UnsafeMutablePointer<NSCollectionView.DropOperation>) -> NSDragOperation {
         let idx = proposedDropIndexPath.pointee as IndexPath
         if proposedDropOperation.pointee == .on {
-            if idx.item < entries.count, case .folder = entries[idx.item] {
-                return .move
-            }
+            if case .folder = entry(at: idx) { return .move }
             proposedDropOperation.pointee = .before
         }
         return .move
@@ -2070,29 +2124,25 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
         let isFolder = comps[0] == "folder"
         let draggedId = comps[1]
 
-        if dropOperation == .on, indexPath.item < entries.count, case .folder(let target) = entries[indexPath.item] {
+        if dropOperation == .on, case .folder(let target) = entry(at: indexPath) {
             if isFolder { model.folders.moveFolder(draggedId, to: target.id) }
             else { model.folders.moveSkill(draggedId, from: folderId, to: target.id) }
             Sound.play(.move)
             return true
         }
-        let anchor = anchorId(forKind: isFolder, atEntryIndex: indexPath.item)
+        let anchor = anchorId(forKind: isFolder, at: indexPath)
         if isFolder { model.folders.reorderFolder(draggedId, in: folderId, before: anchor) }
         else { model.folders.reorderSkill(draggedId, in: folderId, before: anchor) }
         Sound.play(.move)
         return true
     }
 
-    private func anchorId(forKind isFolder: Bool, atEntryIndex idx: Int) -> String? {
-        var i = max(0, idx)
-        while i < entries.count {
-            switch entries[i] {
-            case .folder(let n): if isFolder { return n.id }
-            case .skill(let s): if !isFolder { return s.id }
-            }
-            i += 1
+    private func anchorId(forKind isFolder: Bool, at ip: IndexPath) -> String? {
+        switch entry(at: ip) {
+        case .folder(let n): return isFolder ? n.id : nil
+        case .skill(let s): return isFolder ? nil : s.id
+        case .none: return nil
         }
-        return nil
     }
 
     // --- per-tile context menus ---
@@ -2714,7 +2764,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
             scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 14),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
+            scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -4),
 
             doc.topAnchor.constraint(equalTo: clip.topAnchor),
             doc.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
@@ -2753,7 +2803,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     private func resizeToFit() {
         view.layoutSubtreeIfNeeded()
         let topChrome: CGFloat = 88      // root top → scroll top (header + search + roomier gaps)
-        let bottomPad: CGFloat = 16
+        let bottomPad: CGFloat = 4       // + the contentStack's 10pt bottom inset = 14, matching the sides
         let contentArea = contentStack.fittingSize.height + 14   // doc top(4) + bottom(10) insets
         let maxArea: CGFloat = 430
         let h = topChrome + min(maxArea, contentArea) + bottomPad
