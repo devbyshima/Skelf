@@ -42,7 +42,8 @@ struct Skill: Hashable {
         guard source.contains("/") else { return nil }
         return URL(string: "https://github.com/\(source)")
     }
-    /// The skill's own page in its repo (its folder), not just the repo root.
+    /// The skill's own page in its repo (its folder), not just the repo root. Uses the
+    /// `HEAD` ref so it resolves on any default branch (main, master, …).
     var skillGithubURL: URL? {
         guard source.contains("/") else { return nil }
         var path = skillPath
@@ -50,9 +51,10 @@ struct Skill: Hashable {
             path = String(path.dropLast(suffix.count)); break
         }
         path = path.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
-        return path.isEmpty
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+        return encoded.isEmpty
             ? URL(string: "https://github.com/\(source)")
-            : URL(string: "https://github.com/\(source)/tree/main/\(path)")
+            : URL(string: "https://github.com/\(source)/tree/HEAD/\(encoded)")
     }
     /// The creator's GitHub profile.
     var creatorGithubURL: URL? {
@@ -2642,20 +2644,18 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         optionsButton.translatesAutoresizingMaskIntoConstraints = false
         optionsButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
 
-        // One centered header row: back + title pack left, window + options pack right,
-        // all sharing a single vertical centerline (alignment .centerY).
-        let header = NSStackView()
-        header.orientation = .horizontal
-        header.alignment = .centerY
-        header.spacing = 6
-        header.detachesHiddenViews = true
-        header.translatesAutoresizingMaskIntoConstraints = false
-        header.addView(backButton, in: .leading)
-        header.addView(titleLabel, in: .leading)
-        header.addView(windowButton, in: .trailing)
-        header.addView(optionsButton, in: .trailing)
-        header.setCustomSpacing(10, after: windowButton)
-        root.addSubview(header)
+        // Header: back + title on the left; window + options on the right, each pinned
+        // to the title's optical centerline (icons get a small downward nudge because
+        // SF-symbol glyphs sit slightly higher than centered text).
+        let leftStack = NSStackView(views: [backButton, titleLabel])
+        leftStack.orientation = .horizontal
+        leftStack.alignment = .centerY
+        leftStack.spacing = 5
+        leftStack.detachesHiddenViews = true
+        leftStack.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(leftStack)
+        root.addSubview(windowButton)
+        root.addSubview(optionsButton)
 
         searchField.placeholderString = "Search"
         searchField.delegate = self
@@ -2677,18 +2677,23 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
 
         let clip = scroll.contentView
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: root.topAnchor, constant: 18),
-            header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
-            header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            titleLabel.heightAnchor.constraint(equalToConstant: 24),
-            backButton.widthAnchor.constraint(equalToConstant: 18),
-            backButton.heightAnchor.constraint(equalToConstant: 24),
-            windowButton.widthAnchor.constraint(equalToConstant: 26),
-            windowButton.heightAnchor.constraint(equalToConstant: 24),
-            optionsButton.widthAnchor.constraint(equalToConstant: 26),
-            optionsButton.heightAnchor.constraint(equalToConstant: 24),
+            leftStack.topAnchor.constraint(equalTo: root.topAnchor, constant: 18),
+            leftStack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            leftStack.trailingAnchor.constraint(lessThanOrEqualTo: windowButton.leadingAnchor, constant: -8),
+            titleLabel.heightAnchor.constraint(equalToConstant: 22),
+            backButton.widthAnchor.constraint(equalToConstant: 16),
+            backButton.heightAnchor.constraint(equalToConstant: 22),
 
-            searchField.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 14),
+            optionsButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            optionsButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor, constant: -1),
+            optionsButton.widthAnchor.constraint(equalToConstant: 24),
+            optionsButton.heightAnchor.constraint(equalToConstant: 24),
+            windowButton.trailingAnchor.constraint(equalTo: optionsButton.leadingAnchor, constant: -10),
+            windowButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor, constant: -1),
+            windowButton.widthAnchor.constraint(equalToConstant: 24),
+            windowButton.heightAnchor.constraint(equalToConstant: 24),
+
+            searchField.topAnchor.constraint(equalTo: leftStack.bottomAnchor, constant: 14),
             searchField.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             searchField.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
 
