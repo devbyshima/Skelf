@@ -1959,6 +1959,43 @@ final class CardFlowLayout: NSCollectionViewLayout {
                                                        at indexPath: IndexPath) -> NSCollectionViewLayoutAttributes? {
         elementKind == NSCollectionView.elementKindSectionHeader ? headerAttrs[indexPath] : nil
     }
+
+    // Drag/drop needs the layout to translate the cursor into a drop position. The bare
+    // NSCollectionViewLayout base returns nil for both of these — which is why drop-on-folder
+    // AND reorder broke the moment we stopped subclassing NSCollectionViewFlowLayout (it
+    // synthesized them for free). Re-supply them from our cached item/header frames.
+
+    // Drop ONTO an item (file a tile into a folder): the item under the point, else nearest.
+    override func layoutAttributesForDropTarget(at pointInCollectionView: NSPoint) -> NSCollectionViewLayoutAttributes? {
+        for (_, a) in itemAttrs where a.frame.contains(pointInCollectionView) { return a }
+        var best: NSCollectionViewLayoutAttributes?
+        var bestDist = CGFloat.greatestFiniteMagnitude
+        for (_, a) in itemAttrs {
+            let d = hypot(a.frame.midX - pointInCollectionView.x, a.frame.midY - pointInCollectionView.y)
+            if d < bestDist { bestDist = d; best = a }
+        }
+        return best
+    }
+
+    // Drop BETWEEN items (reorder): a thin gap attribute at the leading edge of the item
+    // BEFORE which the dragged item would be inserted. Without it AppKit can't offer a
+    // `.before` drop position, so reordering did nothing.
+    override func layoutAttributesForInterItemGap(before indexPath: IndexPath) -> NSCollectionViewLayoutAttributes? {
+        let gap = NSCollectionViewLayoutAttributes(forInterItemGapBefore: indexPath)
+        if let a = itemAttrs[indexPath] {
+            // Gap sits just to the LEFT of the target item.
+            gap.frame = NSRect(x: a.frame.minX - interitem, y: a.frame.minY, width: interitem, height: a.frame.height)
+        } else if indexPath.item > 0,
+                  let prev = itemAttrs[IndexPath(item: indexPath.item - 1, section: indexPath.section)] {
+            // "Before the end" of a section: gap sits just to the RIGHT of the last item.
+            gap.frame = NSRect(x: prev.frame.maxX, y: prev.frame.minY, width: interitem, height: prev.frame.height)
+        } else if let h = headerAttrs[IndexPath(item: 0, section: indexPath.section)] {
+            // Empty section: park the gap just under its header so the gesture never stalls.
+            gap.frame = NSRect(x: inset.left, y: h.frame.maxY, width: interitem, height: 1)
+        }
+        return gap
+    }
+
     // Re-lay-out only when the visible width changes (not on vertical scroll).
     override func shouldInvalidateLayout(forBoundsChange newBounds: NSRect) -> Bool {
         guard let cv = collectionView else { return false }
