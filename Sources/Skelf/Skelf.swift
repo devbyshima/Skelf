@@ -761,10 +761,15 @@ final class ArtStore {
     struct Entry: Decodable {
         let url: String
         let title: String?; let artist: String?; let date: String?; let why: String?
+        let medium: String?; let origin: String?; let dimensions: String?; let description: String?
         let by: String?; let license: String?
     }
     // What the banner popover shows about a skill's painting.
-    struct Details { let title: String; let artist: String; let date: String; let why: String; let license: String }
+    struct Details {
+        let title: String; let artist: String; let date: String
+        let medium: String; let origin: String; let dimensions: String; let description: String
+        let why: String; let license: String
+    }
     private var map: [String: Entry] = [:]
     private var mem: [String: NSImage] = [:]
     private var failed: Set<String> = []
@@ -812,14 +817,15 @@ final class ArtStore {
     // Painting details for the banner popover (curated map, else a runtime pick).
     func details(_ id: String) -> Details? {
         if let e = map[id] {
-            let title = e.title ?? e.by ?? "Untitled"
-            return Details(title: title, artist: e.artist ?? "Unknown", date: e.date ?? "",
-                           why: e.why ?? "", license: e.license ?? "Public domain · Art Institute of Chicago")
+            return Details(title: e.title ?? e.by ?? "Untitled", artist: e.artist ?? "Unknown", date: e.date ?? "",
+                           medium: e.medium ?? "", origin: e.origin ?? "", dimensions: e.dimensions ?? "",
+                           description: e.description ?? "", why: e.why ?? "",
+                           license: e.license ?? "Public domain · Art Institute of Chicago")
         }
         if let by = runtimeAttribution[id] {
             let parts = by.components(separatedBy: " — ")
-            return Details(title: parts.first ?? by, artist: parts.count > 1 ? parts[1] : "Unknown",
-                           date: "", why: runtimeWhy[id] ?? "",
+            return Details(title: parts.first ?? by, artist: parts.count > 1 ? parts[1] : "Unknown", date: "",
+                           medium: "", origin: "", dimensions: "", description: "", why: runtimeWhy[id] ?? "",
                            license: "Public domain · Art Institute of Chicago")
         }
         return nil
@@ -1894,7 +1900,7 @@ final class SkillDetailView: NSView {
             readmeCard.topAnchor.constraint(equalTo: summaryBlock.bottomAnchor, constant: 16),
             readmeCard.leadingAnchor.constraint(equalTo: leftBox.leadingAnchor, constant: 24),
             readmeCard.trailingAnchor.constraint(equalTo: leftBox.trailingAnchor, constant: -22),
-            readmeCard.bottomAnchor.constraint(equalTo: leftBox.bottomAnchor, constant: -20),
+            readmeCard.bottomAnchor.constraint(lessThanOrEqualTo: leftBox.bottomAnchor, constant: -20),
 
             hdr.topAnchor.constraint(equalTo: readmeCard.topAnchor),
             hdr.leadingAnchor.constraint(equalTo: readmeCard.leadingAnchor),
@@ -1985,6 +1991,12 @@ final class SkillDetailView: NSView {
             sidebarStack.trailingAnchor.constraint(equalTo: sideDoc.trailingAnchor, constant: -20),
             sidebarStack.bottomAnchor.constraint(lessThanOrEqualTo: sideDoc.bottomAnchor, constant: -24),
         ])
+        // Bottom-align the SKILL.md card with the sidebar so both columns end at the same
+        // height (the reference look); the window-bottom cap above wins if the sidebar would
+        // overflow.
+        let matchSidebar = readmeCard.bottomAnchor.constraint(equalTo: sidebarStack.bottomAnchor)
+        matchSidebar.priority = .defaultHigh
+        matchSidebar.isActive = true
     }
 
     private func card(_ title: String?, _ content: NSView) -> NSView {
@@ -2102,71 +2114,105 @@ final class SkillDetailView: NSView {
     private var paintingPopover: NSPopover?
     @objc private func bannerClicked() {
         guard let skill = skill else { return }
-        let vc = NSViewController()
-        vc.view = paintingCard(skill)
+        let W: CGFloat = 500, maxH: CGFloat = 700
+        let card = paintingCard(skill, width: W)
+        card.layoutSubtreeIfNeeded()
+        let h = card.fittingSize.height
+        let popH = min(h, maxH)
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: W, height: popH))
+        if h > maxH {                              // tall painting/description → make it scroll
+            let scroll = NSScrollView(frame: container.bounds)
+            scroll.autoresizingMask = [.width, .height]
+            scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
+            scroll.drawsBackground = false; scroll.borderType = .noBorder
+            scroll.documentView = card
+            card.translatesAutoresizingMaskIntoConstraints = true
+            card.frame = NSRect(x: 0, y: 0, width: W, height: h)
+            card.autoresizingMask = [.width]
+            container.addSubview(scroll)
+        } else {
+            card.frame = NSRect(x: 0, y: 0, width: W, height: popH)
+            card.autoresizingMask = [.width, .height]
+            container.addSubview(card)
+        }
+        let vc = NSViewController(); vc.view = container
         let pop = NSPopover()
         pop.contentViewController = vc
         pop.behavior = .transient
-        pop.contentSize = vc.view.fittingSize
+        pop.contentSize = NSSize(width: W, height: popH)
         pop.show(relativeTo: banner.bounds, of: banner, preferredEdge: .maxY)
         paintingPopover = pop
     }
 
-    private func paintingCard(_ skill: Skill) -> NSView {
+    // A big card: the full painting, its museum details + history, then why it fits the skill.
+    private func paintingCard(_ skill: Skill, width W: CGFloat) -> NSView {
         let d = ArtStore.shared.details(skill.id)
-        let W: CGFloat = 340
-        let root = NSView()
-        root.translatesAutoresizingMaskIntoConstraints = false
-        root.widthAnchor.constraint(equalToConstant: W).isActive = true
+        let pad: CGFloat = 18, innerW = W - pad * 2
+        let card = NSView()
+        card.wantsLayer = true
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.widthAnchor.constraint(equalToConstant: W).isActive = true
 
-        let thumb = RowThumb()
-        thumb.translatesAutoresizingMaskIntoConstraints = false
-        thumb.layer?.cornerRadius = 9
-        thumb.widthAnchor.constraint(equalToConstant: 66).isActive = true
-        thumb.heightAnchor.constraint(equalToConstant: 66).isActive = true
-        if let img = ArtStore.shared.cached(skill.id) { thumb.setImage(img) }
-        else { thumb.setCG(SkillArtView.themedImage(skill)) }
+        let iv = NSImageView()
+        iv.imageScaling = .scaleProportionallyUpOrDown
+        iv.wantsLayer = true; iv.layer?.cornerRadius = 8; iv.layer?.masksToBounds = true
+        iv.translatesAutoresizingMaskIntoConstraints = false
+        var imgH: CGFloat = min(innerW * 1.2, 380)
+        if let img = ArtStore.shared.cached(skill.id) {
+            iv.image = img
+            if img.size.width > 0 { imgH = min(innerW * img.size.height / img.size.width, 380) }
+        } else {
+            iv.image = NSImage(cgImage: SkillArtView.themedImage(skill), size: NSSize(width: 320, height: 420))
+        }
 
-        func label(_ s: String, _ size: CGFloat, _ weight: NSFont.Weight, _ color: NSColor, wrap: Bool = false) -> NSTextField {
-            let l = wrap ? NSTextField(wrappingLabelWithString: s) : NSTextField(labelWithString: s)
-            l.font = .systemFont(ofSize: size, weight: weight); l.textColor = color
+        func lbl(_ s: String, _ size: CGFloat, _ w: NSFont.Weight, _ c: NSColor) -> NSTextField {
+            let l = NSTextField(wrappingLabelWithString: s)
+            l.font = .systemFont(ofSize: size, weight: w); l.textColor = c
             l.translatesAutoresizingMaskIntoConstraints = false
+            l.widthAnchor.constraint(equalToConstant: innerW).isActive = true
             return l
         }
-        let title = label(d?.title ?? "Generated cover art", 14, .bold, .labelColor, wrap: true)
-        let metaParts = [d?.artist, d?.date].compactMap { $0 }.filter { !$0.isEmpty }
-        let meta = label(metaParts.joined(separator: " · "), 12, .regular, .secondaryLabelColor, wrap: true)
-        let titleCol = NSStackView(views: meta.stringValue.isEmpty ? [title] : [title, meta])
-        titleCol.orientation = .vertical; titleCol.alignment = .leading; titleCol.spacing = 3
-        titleCol.translatesAutoresizingMaskIntoConstraints = false
-        let header = NSStackView(views: [thumb, titleCol])
-        header.orientation = .horizontal; header.alignment = .centerY; header.spacing = 12
-        header.translatesAutoresizingMaskIntoConstraints = false
+        let stack = NSStackView()
+        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(iv)
+        iv.widthAnchor.constraint(equalToConstant: innerW).isActive = true
+        iv.heightAnchor.constraint(equalToConstant: imgH).isActive = true
+        stack.setCustomSpacing(14, after: iv)
 
+        stack.addArrangedSubview(lbl(d?.title ?? "Generated cover art", 17, .bold, .labelColor))
+        if let a = d?.artist, !a.isEmpty { stack.addArrangedSubview(lbl(a, 13.5, .regular, .labelColor)) }
+        let metaParts = [d?.date, d?.origin, d?.medium].compactMap { $0 }.filter { !$0.isEmpty }
+        if !metaParts.isEmpty { stack.addArrangedSubview(lbl(metaParts.joined(separator: " · "), 12, .regular, .secondaryLabelColor)) }
+        if let dim = d?.dimensions, !dim.isEmpty { stack.addArrangedSubview(lbl(dim, 11, .regular, .tertiaryLabelColor)) }
+        if let desc = d?.description, !desc.isEmpty {
+            let dl = lbl(desc, 12.5, .regular, .labelColor.withAlphaComponent(0.85))
+            stack.setCustomSpacing(12, after: stack.arrangedSubviews.last!)
+            stack.addArrangedSubview(dl)
+            stack.setCustomSpacing(14, after: dl)
+        } else {
+            stack.setCustomSpacing(14, after: stack.arrangedSubviews.last!)
+        }
         let divider = NSBox(); divider.boxType = .separator; divider.translatesAutoresizingMaskIntoConstraints = false
-        let whyHdr = label("WHY THIS PAINTING", 10, .semibold, .tertiaryLabelColor)
-        let whyText = (d?.why).flatMap { $0.isEmpty ? nil : $0 }
-            ?? "This skill uses a generated cover (no museum painting was matched)."
-        let why = label(whyText, 13, .regular, .labelColor, wrap: true)
-        let lic = label(d?.license ?? "Generated artwork", 11, .regular, .tertiaryLabelColor, wrap: true)
+        stack.addArrangedSubview(divider)
+        divider.widthAnchor.constraint(equalToConstant: innerW).isActive = true
+        stack.setCustomSpacing(12, after: divider)
+        stack.addArrangedSubview(lbl("WHY THIS PAINTING FOR THIS SKILL", 10.5, .semibold, .tertiaryLabelColor))
+        let whyText = (d?.why).flatMap { $0.isEmpty ? nil : $0 } ?? "This skill uses a generated cover (no museum painting matched)."
+        stack.addArrangedSubview(lbl(whyText, 13.5, .medium, .labelColor))
+        let lic = lbl(d?.license ?? "Generated artwork", 11, .regular, .tertiaryLabelColor)
+        stack.setCustomSpacing(12, after: stack.arrangedSubviews[stack.arrangedSubviews.count - 1])
+        stack.addArrangedSubview(lic)
 
-        let col = NSStackView(views: [header, divider, whyHdr, why, lic])
-        col.orientation = .vertical; col.alignment = .leading; col.spacing = 10
-        col.translatesAutoresizingMaskIntoConstraints = false
-        col.setCustomSpacing(8, after: whyHdr)
-        col.setCustomSpacing(14, after: why)
-        root.addSubview(col)
+        card.addSubview(stack)
         NSLayoutConstraint.activate([
-            col.topAnchor.constraint(equalTo: root.topAnchor, constant: 16),
-            col.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
-            col.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            col.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
-            divider.widthAnchor.constraint(equalTo: col.widthAnchor),
-            title.widthAnchor.constraint(lessThanOrEqualToConstant: W - 16 - 66 - 12 - 16),
-            why.widthAnchor.constraint(equalTo: col.widthAnchor),
-            lic.widthAnchor.constraint(equalTo: col.widthAnchor),
+            stack.topAnchor.constraint(equalTo: card.topAnchor, constant: pad),
+            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: pad),
+            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -pad),
+            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -pad),
         ])
-        return root
+        return card
     }
 
     private func rebuildSidebar(_ skill: Skill, isFavorite: Bool, creator: String?, token: Int) {
