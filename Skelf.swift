@@ -1238,13 +1238,34 @@ func promptForText(title: String, default def: String, _ done: @escaping (String
 // item on a clean mouse-up with no drag, so press-and-drag is free to reorder/move.
 final class GridCollectionView: NSCollectionView {
     var onActivate: ((IndexPath) -> Void)?
-    var dragDidStart = false
+    private var downIP: IndexPath?
+    private var downPoint: NSPoint = .zero
+    private var didDrag = false
+
+    // NSCollectionView.mouseDown is NOT modal (unlike NSTableView): it returns
+    // promptly and drags are driven by later mouseDragged events. So we track the
+    // gesture ourselves — navigate only on a clean mouse-up with no drag, which
+    // leaves the built-in reorder/move drag path free (see ClickableRow for the
+    // same idiom).
     override func mouseDown(with event: NSEvent) {
-        let pt = convert(event.locationInWindow, from: nil)
-        let ip = indexPathForItem(at: pt)
-        dragDidStart = false
-        super.mouseDown(with: event)   // modal: returns once the click/drag has finished
-        if let ip = ip, !dragDidStart, event.clickCount == 1 { onActivate?(ip) }
+        downPoint = event.locationInWindow
+        downIP = indexPathForItem(at: convert(event.locationInWindow, from: nil))
+        didDrag = false
+        super.mouseDown(with: event)
+    }
+    override func mouseDragged(with event: NSEvent) {
+        if !didDrag {
+            let p = event.locationInWindow
+            if hypot(p.x - downPoint.x, p.y - downPoint.y) > 4 { didDrag = true }
+        }
+        super.mouseDragged(with: event)
+    }
+    override func mouseUp(with event: NSEvent) {
+        let ip = downIP, dragged = didDrag
+        super.mouseUp(with: event)
+        if let ip = ip, !dragged, event.clickCount == 1 { onActivate?(ip) }
+        downIP = nil
+        didDrag = false
     }
 }
 
@@ -1388,11 +1409,6 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
     // --- drag & drop / reorder ---
     func collectionView(_ cv: NSCollectionView, canDragItemsAt indexPaths: Set<IndexPath>, with event: NSEvent) -> Bool {
         return query.trimmingCharacters(in: .whitespaces).isEmpty && filterMode == 0
-    }
-
-    func collectionView(_ cv: NSCollectionView, draggingSession session: NSDraggingSession,
-                        willBeginAt screenPoint: NSPoint, forItemsAt indexPaths: Set<IndexPath>) {
-        (cv as? GridCollectionView)?.dragDidStart = true
     }
 
     func collectionView(_ cv: NSCollectionView, pasteboardWriterForItemAt indexPath: IndexPath) -> NSPasteboardWriting? {
