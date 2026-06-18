@@ -384,6 +384,11 @@ final class FolderStore {
     func node(_ id: String) -> Node? { nodes[id] }
     func childFolders(of id: String) -> [Node] { (nodes[id]?.folders ?? []).compactMap { nodes[$0] } }
     func skillIds(in id: String) -> [String] { nodes[id]?.skills ?? [] }
+    /// Every real folder in the tree (root excluded), name-sorted — for global search.
+    func allFolders() -> [Node] {
+        nodes.values.filter { $0.id != rootId }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
 
     func path(to id: String) -> [Node] {
         var out: [Node] = []
@@ -2269,7 +2274,7 @@ final class SkillDetailView: NSView {
         let img = ArtStore.shared.cached(skill.id)
         let aspect: CGFloat = (img.map { $0.size.width > 0 ? $0.size.height / $0.size.width : 1.31 }) ?? 420.0 / 320.0
         let portrait = aspect > 1.12
-        let screenMaxH = (NSScreen.main?.visibleFrame.height ?? 900) - 100
+        let screenMaxH = ((self.window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 900) - 100
         let radius: CGFloat = 20
 
         let art = SkillArtView(); art.showScrim = false
@@ -2352,7 +2357,7 @@ final class SkillDetailView: NSView {
         panel.isMovableByWindowBackground = true
         panel.isReleasedWhenClosed = false
         panel.contentView = glass
-        panel.center()
+        panel.centerInScreen(self.window?.screen)
         panel.level = .floating
         panel.makeKeyAndOrderFront(nil)
         panel.animateOpen(scaling: glass.layer)
@@ -2825,6 +2830,22 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
     private func buildEntries() {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
 
+        // GLOBAL SEARCH — any non-empty query searches the WHOLE library (every folder and
+        // every skill across the tree), no matter which screen it was typed on, so it always
+        // gets you to what you're looking for. Folders open; skills open their detail. This
+        // wins over the per-folder / Favorites scoping below.
+        if !q.isEmpty {
+            let foundFolders = model.folders.allFolders().filter { $0.name.lowercased().contains(q) }
+            let matched = model.store.skills.filter { skillMatches($0, q) }
+            let on = matched.filter { $0.enabled }, off = matched.filter { !$0.enabled }
+            var s: [(title: String, items: [GridEntry])] = []
+            if !foundFolders.isEmpty { s.append(("Folders", foundFolders.map { .folder($0) })) }
+            if !on.isEmpty { s.append(("Skills", on.map { .skill($0) })) }
+            if !off.isEmpty { s.append(("Off Skills", off.map { .skill($0) })) }
+            sections = s
+            return
+        }
+
         // The virtual Favorites folder: every favorited skill, wherever it lives.
         if folderId == favoritesFolderId {
             let favs = model.store.skills.filter { model.favorites.isFavorite($0.id) && skillMatches($0, q) }
@@ -3171,7 +3192,7 @@ struct FolderScreen: View {
                           onOpenSkill: { model.path.append(.skill($0)) },
                           onOpenFolder: { model.path.append(.folder($0)) })
             .navigationTitle(folderId == model.folders.rootId ? "Skelf" : model.folderName(folderId))
-            .searchable(text: $query, prompt: "Search this folder")
+            .searchable(text: $query, prompt: "Search all skills & folders")
             .toolbar {
                 // The virtual Favorites folder can't hold sub-folders or pasted items.
                 if folderId != favoritesFolderId {
@@ -3186,6 +3207,16 @@ struct FolderScreen: View {
                         Button { model.newFolder(in: folderId) } label: {
                             Label("New Folder", systemImage: "folder.badge.plus")
                         }
+                    }
+                    // Split Settings into its own glass container — only meaningful when
+                    // New Folder precedes it (so it's kept inside this conditional).
+                    ToolbarSpacer(.fixed)
+                }
+                // Settings — its own button, available on every screen (stands alone on the
+                // Favorites screen, where New Folder and the spacer above are absent).
+                ToolbarItem {
+                    Button { NSApp.sendAction(#selector(AppDelegate.openSettings), to: nil, from: nil) } label: {
+                        Label("Settings", systemImage: "gearshape")
                     }
                 }
             }
@@ -3690,11 +3721,20 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         }
 
         if searching {
-            let matched = favorites.ordered(store.skills.filter {
-                $0.name.lowercased().contains(q) || $0.category.lowercased().contains(q) || $0.description.lowercased().contains(q)
-            })
-            if matched.isEmpty { addEmpty("No skills match.") }
-            else { addSection("Results", matched.map { skillRow($0) }) }
+            // Global search — SAME scope, fields, and ordering as the main app window
+            // (every folder + every skill; matched on name/description/category/source;
+            // enabled before off, name order), so search behaves identically in both.
+            let foundFolders = folders.allFolders().filter { $0.name.lowercased().contains(q) }
+            let matched = store.skills.filter {
+                $0.name.lowercased().contains(q) || $0.category.lowercased().contains(q)
+                    || $0.description.lowercased().contains(q) || $0.source.lowercased().contains(q)
+            }
+            let ordered = matched.filter { $0.enabled } + matched.filter { !$0.enabled }
+            if ordered.isEmpty && foundFolders.isEmpty { addEmpty("Nothing matches.") }
+            else {
+                if !foundFolders.isEmpty { addSection("Folders", foundFolders.map { folderRow($0) }) }
+                if !ordered.isEmpty { addSection("Skills", ordered.map { skillRow($0) }) }
+            }
         } else if currentId == folders.rootId {
             let favs = favorites.ordered(store.skills.filter { favorites.isFavorite($0.id) })
             let folderRows = folders.menuBarFolders().map { folderRow($0) }   // only user-opted-in folders
@@ -3928,7 +3968,12 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     @objc private func goBack() {
         if let p = folders.node(currentId)?.parent { currentId = p; reload(); slideContent(from: -38) }
     }
-    private func enter(_ id: String) { currentId = id; reload(); slideContent(from: 38) }
+    private func enter(_ id: String) {
+        // Entering a folder from search results leaves search behind, so reload() shows the
+        // folder's contents (not the global results) and the field clears.
+        if !query.isEmpty { query = ""; searchField.stringValue = "" }
+        currentId = id; reload(); slideContent(from: 38)
+    }
 
     // Springy directional slide between folder views (drill-in slides from the right, back from the left).
     private func slideContent(from dx: CGFloat) {
@@ -3986,6 +4031,20 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
 }
 
 // MARK: - App delegate
+
+extension NSWindow {
+    /// Position truly centered on a screen — both axes, not NSWindow.center()'s
+    /// above-center bias. Falls back to the window's own screen, then the main screen.
+    func centerInScreen(_ screen: NSScreen? = nil) {
+        guard let vf = (screen ?? self.screen ?? NSScreen.main)?.visibleFrame else { center(); return }
+        let f = frame
+        // Center, but clamp the origin so an oversized window keeps its top-left on-screen
+        // (controls stay reachable) rather than hanging off both edges.
+        let x = max(vf.minX, min(vf.minX + (vf.width - f.width) / 2, vf.maxX - f.width))
+        let y = max(vf.minY, min(vf.minY + (vf.height - f.height) / 2, vf.maxY - f.height))
+        setFrameOrigin(NSPoint(x: x.rounded(), y: y.rounded()))
+    }
+}
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate {
     let store = SkillStore()
@@ -4122,13 +4181,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     @objc func openSettings() {
         if settingsWindow == nil {
             let host = NSHostingController(rootView: SettingsView(settings: AppSettings.shared))
+            host.view.layoutSubtreeIfNeeded()             // resolve the SwiftUI size now…
             let w = NSWindow(contentViewController: host)
             w.title = "Skelf Settings"
             w.styleMask = [.titled, .closable]            // standard, non-resizable Settings window
             w.isReleasedWhenClosed = false
-            w.center()
+            w.setContentSize(host.view.fittingSize)       // …so centering uses the real frame, not a stale one
             settingsWindow = w
         }
+        // True-center on the screen showing the main window when it (re)opens — but don't
+        // yank a Settings window that's already open (the user may have moved it).
+        if settingsWindow?.isVisible != true { settingsWindow?.centerInScreen(window?.screen) }
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
