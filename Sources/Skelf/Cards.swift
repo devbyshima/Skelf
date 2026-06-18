@@ -269,6 +269,7 @@ final class SkillGridItem: NSCollectionViewItem {
     private var hovering = false
     private var artKey = ""
     private(set) var skillId = ""
+    private var skill: Skill?            // for the Liquid Glass hover tip
     private var isFav = false
     var onMenu: ((NSView) -> Void)?
     var onToggleFavorite: (() -> Void)?
@@ -353,6 +354,7 @@ final class SkillGridItem: NSCollectionViewItem {
 
     func configure(_ skill: Skill, isFavorite: Bool) {
         skillId = skill.id
+        self.skill = skill
         artKey = skill.id
         // Each skill card wears its own unique art: the mapped Creative-Commons image when
         // available, otherwise an immediate generated themed fallback (gradient + icon).
@@ -371,8 +373,7 @@ final class SkillGridItem: NSCollectionViewItem {
         setFavorite(isFavorite, animated: false)
         setCopyTitle("Copy")
         view.alphaValue = skill.enabled ? 1.0 : 0.62
-        view.toolTip = "\(skill.initiator)\n\n\(skill.description)"
-        resetHover()
+        resetHover()                        // the hover info is now a Liquid Glass tip (no system tooltip)
     }
 
     /// Update the star, optionally with a springy pop (used when the user toggles it).
@@ -396,7 +397,7 @@ final class SkillGridItem: NSCollectionViewItem {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak self] in self?.setCopyTitle("Copy") }
     }
 
-    func pressPop() { springPop(view.layer, from: 0.97) }
+    func pressPop() { SkillHoverTip.shared.cancel(); springPop(view.layer, from: 0.97) }
 
     private func resetHover() {
         hovering = false
@@ -404,8 +405,14 @@ final class SkillGridItem: NSCollectionViewItem {
         view.layer?.shadowOpacity = 0
         view.layer?.zPosition = 0
     }
-    override func mouseEntered(with event: NSEvent) { hovering = true; applyHover() }
-    override func mouseExited(with event: NSEvent) { hovering = false; applyHover() }
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true; applyHover()
+        if let s = skill, let win = view.window {
+            let frame = win.convertToScreen(view.convert(view.bounds, to: nil))
+            SkillHoverTip.shared.schedule(for: s, cardScreenFrame: frame, on: win.screen)
+        }
+    }
+    override func mouseExited(with event: NSEvent) { hovering = false; applyHover(); SkillHoverTip.shared.cancel() }
     private func applyHover() {
         guard let l = view.layer else { return }
         l.zPosition = hovering ? 1 : 0
@@ -485,7 +492,6 @@ final class FolderGridItem: NSCollectionViewItem {
         art.setFavoritesArt()
         nameLabel.stringValue = "Favorites"
         countLabel.stringValue = "\(count) skill\(count == 1 ? "" : "s")"
-        view.toolTip = "Your favorite skills"
         menuCircle.isHidden = true
         resetHover()
     }
@@ -518,7 +524,6 @@ final class FolderGridItem: NSCollectionViewItem {
         if f > 0 { parts.append("\(f) folder\(f == 1 ? "" : "s")") }
         parts.append("\(s) skill\(s == 1 ? "" : "s")")
         countLabel.stringValue = parts.joined(separator: " · ")
-        view.toolTip = node.name
         resetHover()
     }
 
