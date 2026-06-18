@@ -4,6 +4,8 @@ A tiny **native macOS menu-bar + window app** that lists your installed Claude C
 Browse a grid, open a skill's detail, and **Copy** its slash-command (e.g. `/humanizer`) to
 paste into cloud sessions.
 
+![Skelf — a grid of skill cards backed by public-domain paintings, grouped into creator folders](docs/screenshot.png)
+
 SwiftUI `NavigationStack` + Liquid Glass toolbars (bridged via
 `NSHostingController.sceneBridgingOptions`) hosting an AppKit grid + detail. One SwiftPM
 target, split into focused files under `Sources/Skelf/`. Targets **macOS 26** (Liquid Glass);
