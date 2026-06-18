@@ -1,6 +1,7 @@
 # Build output
 Skelf.app/
 *.dmg
+SHA256SUMS
 *.swiftmodule
 *.swiftdoc
 *.o
@@ -21,3 +22,6 @@ xcuserdata/
 # macOS cruft
 .DS_Store
 **/.DS_Store
+
+# Internal release-readiness report (kept locally, not part of the repo)
+docs/RELEASE_READINESS.md

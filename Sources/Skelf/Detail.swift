@@ -184,7 +184,7 @@ final class SkillDetailView: NSView {
             bodyScroll.topAnchor.constraint(equalTo: hdrDivider.bottomAnchor),
             bodyScroll.leadingAnchor.constraint(equalTo: readmeCard.leadingAnchor),
             bodyScroll.trailingAnchor.constraint(equalTo: readmeCard.trailingAnchor),
-            bodyScroll.bottomAnchor.constraint(equalTo: readmeCard.bottomAnchor),
+            bodyScroll.bottomAnchor.constraint(equalTo: readmeCard.bottomAnchor)
         ])
 
         // right: sticky sidebar (own scroll)
@@ -255,7 +255,7 @@ final class SkillDetailView: NSView {
             sidebarStack.topAnchor.constraint(equalTo: sideDoc.topAnchor, constant: 20),
             sidebarStack.leadingAnchor.constraint(equalTo: sideDoc.leadingAnchor, constant: 4),
             sidebarStack.trailingAnchor.constraint(equalTo: sideDoc.trailingAnchor, constant: -20),
-            sidebarStack.bottomAnchor.constraint(lessThanOrEqualTo: sideDoc.bottomAnchor, constant: -24),
+            sidebarStack.bottomAnchor.constraint(lessThanOrEqualTo: sideDoc.bottomAnchor, constant: -24)
         ])
     }
 
@@ -282,7 +282,7 @@ final class SkillDetailView: NSView {
             stack.topAnchor.constraint(equalTo: c.topAnchor, constant: 14),
             stack.bottomAnchor.constraint(equalTo: c.bottomAnchor, constant: -14),
             stack.leadingAnchor.constraint(equalTo: c.leadingAnchor, constant: 14),
-            stack.trailingAnchor.constraint(equalTo: c.trailingAnchor, constant: -14),
+            stack.trailingAnchor.constraint(equalTo: c.trailingAnchor, constant: -14)
         ])
         return c
     }
@@ -320,8 +320,7 @@ final class SkillDetailView: NSView {
         let creator = skill.source.contains("/") ? skill.source.split(separator: "/").first.map(String.init) : nil
         // The header banner wears the skill's own art (same as its card); the Source
         // sidebar below keeps the creator avatar.
-        if let img = ArtStore.shared.cached(skill.id) { banner.setAvatar(img) }
-        else {
+        if let img = ArtStore.shared.cached(skill.id) { banner.setAvatar(img) } else {
             banner.setThemedFallback(skill)
             ArtStore.shared.fetch(skill) { [weak self] img in
                 guard let self = self, self.artToken == token, let img = img else { return }
@@ -396,12 +395,12 @@ final class SkillDetailView: NSView {
         card.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(art); card.addSubview(info)
 
-        var W: CGFloat, H: CGFloat
+        var w: CGFloat, h: CGFloat
         if portrait {
             // image LEFT, fills the panel height at the painting's exact aspect (no crop); info RIGHT
-            H = max(infoH, 560)
-            let imageW = (H / aspect).rounded()
-            W = imageW + infoColW
+            h = max(infoH, 560)
+            let imageW = (h / aspect).rounded()
+            w = imageW + infoColW
             NSLayoutConstraint.activate([
                 art.topAnchor.constraint(equalTo: card.topAnchor),
                 art.bottomAnchor.constraint(equalTo: card.bottomAnchor),
@@ -411,14 +410,14 @@ final class SkillDetailView: NSView {
                 info.leadingAnchor.constraint(equalTo: art.trailingAnchor),
                 info.trailingAnchor.constraint(equalTo: card.trailingAnchor),
                 info.widthAnchor.constraint(equalToConstant: infoColW),
-                card.widthAnchor.constraint(equalToConstant: W),
-                card.heightAnchor.constraint(equalToConstant: H),
+                card.widthAnchor.constraint(equalToConstant: w),
+                card.heightAnchor.constraint(equalToConstant: h)
             ])
         } else {
             // image TOP full-bleed, info BELOW
-            W = 760
-            let imgH = min(W * aspect, 440)
-            H = imgH + infoH
+            w = 760
+            let imgH = min(w * aspect, 440)
+            h = imgH + infoH
             NSLayoutConstraint.activate([
                 art.topAnchor.constraint(equalTo: card.topAnchor),
                 art.leadingAnchor.constraint(equalTo: card.leadingAnchor),
@@ -427,15 +426,15 @@ final class SkillDetailView: NSView {
                 info.topAnchor.constraint(equalTo: art.bottomAnchor),
                 info.leadingAnchor.constraint(equalTo: card.leadingAnchor),
                 info.trailingAnchor.constraint(equalTo: card.trailingAnchor),
-                card.widthAnchor.constraint(equalToConstant: W),
-                card.heightAnchor.constraint(equalToConstant: H),
+                card.widthAnchor.constraint(equalToConstant: w),
+                card.heightAnchor.constraint(equalToConstant: h)
             ])
         }
 
-        let panelH = min(H, screenMaxH)
+        let panelH = min(h, screenMaxH)
         let content: NSView
-        if H > screenMaxH {                            // taller than the screen → scroll the whole card
-            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: W, height: panelH))
+        if h > screenMaxH {                            // taller than the screen → scroll the whole card
+            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: w, height: panelH))
             scroll.autoresizingMask = [.width, .height]
             scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
             scroll.drawsBackground = false; scroll.borderType = .noBorder
@@ -445,7 +444,7 @@ final class SkillDetailView: NSView {
             content = card
         }
 
-        let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: W, height: panelH))
+        let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: w, height: panelH))
         glass.cornerRadius = radius
         glass.autoresizingMask = [.width, .height]
         glass.contentView = content
@@ -454,7 +453,7 @@ final class SkillDetailView: NSView {
         content.layer?.masksToBounds = true
 
         // Borderless (no traffic-light close button); closes on Escape / click-away.
-        let panel = PaintingPanel(contentRect: NSRect(x: 0, y: 0, width: W, height: panelH),
+        let panel = PaintingPanel(contentRect: NSRect(x: 0, y: 0, width: w, height: panelH),
                                   styleMask: [.borderless], backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -533,7 +532,7 @@ final class SkillDetailView: NSView {
             whyStack.leadingAnchor.constraint(equalTo: whyBox.leadingAnchor, constant: 14),
             whyStack.trailingAnchor.constraint(equalTo: whyBox.trailingAnchor, constant: -14),
             whyStack.bottomAnchor.constraint(equalTo: whyBox.bottomAnchor, constant: -12),
-            whyBox.widthAnchor.constraint(equalToConstant: innerW),
+            whyBox.widthAnchor.constraint(equalToConstant: innerW)
         ])
         stack.setCustomSpacing(18, after: stack.arrangedSubviews.last!)
         stack.addArrangedSubview(whyBox)
@@ -544,7 +543,7 @@ final class SkillDetailView: NSView {
             stack.topAnchor.constraint(equalTo: box.topAnchor, constant: pad),
             stack.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: pad),
             stack.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -pad),
-            stack.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -pad),
+            stack.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -pad)
         ])
         return box
     }
@@ -558,8 +557,7 @@ final class SkillDetailView: NSView {
         avatar.layer?.cornerRadius = 8; avatar.showScrim = false
         avatar.setGradient(creatorName)
         if let creator = creator {
-            if let img = AvatarStore.shared.cached(creator) { avatar.setAvatar(img) }
-            else { AvatarStore.shared.fetch(creator) { [weak self] img in
+            if let img = AvatarStore.shared.cached(creator) { avatar.setAvatar(img) } else { AvatarStore.shared.fetch(creator) { [weak self] img in
                 guard let self = self, self.artToken == token, let img = img else { return }
                 avatar.setAvatar(img) } }
         }

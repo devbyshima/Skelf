@@ -8,6 +8,13 @@ SRCDIR="$DIR/Sources/Skelf"
 RES="$DIR/Resources"
 ARCH="$(uname -m)"   # arm64 on Apple Silicon
 
+# Version — the single source of truth for the app's version. SKELF_VERSION is the public
+# (marketing) version, SemVer; SKELF_BUILD is a monotonic build number, bumped each release
+# build. Both are written into Info.plist below and read back at runtime by Bundle+Skelf.swift
+# (skelfShortVersion / skelfBuildVersion) and surfaced via `Skelf --version`.
+SKELF_VERSION="1.0.0"
+SKELF_BUILD="1"
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -22,8 +29,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>Skelf</string>
   <key>CFBundleIconFile</key><string>Skelf</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>${SKELF_VERSION}</string>
+  <key>CFBundleVersion</key><string>${SKELF_BUILD}</string>
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSHighResolutionCapable</key><true/>
@@ -69,7 +76,9 @@ swiftc -O -swift-version 5 -parse-as-library \
   "$SRCDIR"/*.swift \
   -o "$APP/Contents/MacOS/Skelf"
 
-# Ad-hoc sign so the locally-built app launches cleanly.
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
+# Ad-hoc sign so the locally-built app launches cleanly. Skelf is a single binary, so --deep
+# is unnecessary (and Apple deprecates it for signing). Released builds are also ad-hoc/unsigned;
+# see the README "Install" section for the macOS first-launch (Gatekeeper) approval step.
+codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 
 echo "Built $APP"

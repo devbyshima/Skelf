@@ -77,4 +77,8 @@ for _ in 1 2 3 4 5; do hdiutil detach "$MOUNT" >/dev/null 2>&1 && break || sleep
 hdiutil detach "$MOUNT" -force >/dev/null 2>&1 || true
 hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -o "$DMG" >/dev/null
 
+# 6. Checksum, so a release can publish Skelf.dmg + SHA256SUMS for users to verify the download.
+( cd "$ROOT" && shasum -a 256 "$(basename "$DMG")" > SHA256SUMS )
+
 echo "Built $DMG"
+echo "Wrote $ROOT/SHA256SUMS"
