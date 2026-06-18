@@ -418,26 +418,6 @@ final class FolderStore {
         }
     }
 
-    func reorderSkill(_ id: String, in folder: String, before anchorId: String?) {
-        guard nodes[folder]?.skills != nil else { return }
-        apply("Reorder") {
-            var arr = nodes[folder]!.skills
-            arr.removeAll { $0 == id }
-            if let a = anchorId, let i = arr.firstIndex(of: a) { arr.insert(id, at: i) } else { arr.append(id) }
-            nodes[folder]?.skills = arr
-        }
-    }
-
-    func reorderFolder(_ id: String, in parent: String, before anchorId: String?) {
-        guard nodes[parent]?.folders != nil else { return }
-        apply("Reorder") {
-            var arr = nodes[parent]!.folders
-            arr.removeAll { $0 == id }
-            if let a = anchorId, let i = arr.firstIndex(of: a) { arr.insert(id, at: i) } else { arr.append(id) }
-            nodes[parent]?.folders = arr
-        }
-    }
-
     /// Keep the overlay consistent with what's actually installed (called on every reload).
     func syncInstalled(_ installed: Set<String>) {
         var changed = false
@@ -522,13 +502,15 @@ final class FolderStore {
 }
 
 // A row in the folder-navigating grid: a sub-folder or a skill.
+// The special "Favorites" folder is virtual (not a real FolderStore.Node) — it gathers
+// every favorited skill and is shown first on the home grid with a distinct look.
+let favoritesFolderId = "__favorites__"
+
 enum GridEntry {
     case folder(FolderStore.Node)
     case skill(Skill)
+    case favorites(Int)   // the virtual Favorites folder, carrying its skill count
 }
-
-// Drag-and-drop payload type for grid items ("skill:<id>" / "folder:<id>").
-let skelfEntryType = NSPasteboard.PasteboardType("dev.fulltime.skelf.entry")
 
 // MARK: - Shared helpers
 
@@ -772,6 +754,30 @@ final class SkillArtView: NSView {
     func setAvatar(_ image: NSImage) {
         var r = CGRect(origin: .zero, size: image.size)
         imageLayer.contents = image.cgImage(forProposedRect: &r, context: nil, hints: nil)
+    }
+    func setFavoritesArt() { imageLayer.contents = Self.favoritesImage() }
+
+    // A deliberately distinct look for the special "Favorites" folder: a warm
+    // amber→rose gradient with a big translucent star — unlike any avatar/gradient card.
+    private static var favoritesCache: CGImage?
+    static func favoritesImage() -> CGImage {
+        if let c = favoritesCache { return c }
+        let size = CGSize(width: 320, height: 420)
+        let img = NSImage(size: size)
+        img.lockFocus()
+        let c0 = NSColor(calibratedRed: 1.00, green: 0.66, blue: 0.20, alpha: 1)   // amber
+        let c1 = NSColor(calibratedRed: 0.95, green: 0.26, blue: 0.46, alpha: 1)   // rose
+        if let g = NSGradient(starting: c0, ending: c1) { g.draw(in: NSRect(origin: .zero, size: size), angle: 62) }
+        let star = "★" as NSString
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: size.width * 0.62, weight: .black),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.22)]
+        let ss = star.size(withAttributes: attrs)
+        star.draw(at: NSPoint(x: (size.width - ss.width) / 2, y: size.height * 0.40), withAttributes: attrs)
+        img.unlockFocus()
+        var r = CGRect(origin: .zero, size: size)
+        favoritesCache = img.cgImage(forProposedRect: &r, context: nil, hints: nil)
+        return favoritesCache ?? CGImage.empty
     }
 
     static func gradientImage(_ name: String, monogram: Bool) -> CGImage {
@@ -1119,7 +1125,19 @@ final class FolderGridItem: NSCollectionViewItem {
         view = root
     }
 
+    // The special "Favorites" folder — distinct art, no ⋯ menu.
+    func configureFavorites(count: Int) {
+        artKey = "__favorites__"
+        art.setFavoritesArt()
+        nameLabel.stringValue = "Favorites"
+        countLabel.stringValue = "\(count) skill\(count == 1 ? "" : "s")"
+        view.toolTip = "Your favorite skills"
+        menuCircle.isHidden = true
+        resetHover()
+    }
+
     func configure(_ node: FolderStore.Node, inMenuBar: Bool) {
+        menuCircle.isHidden = false
         // creator folders wear the creator's avatar; user folders get a gradient
         if let creator = node.autoCreator {
             artKey = creator
@@ -1841,33 +1859,19 @@ func promptForText(title: String, default def: String, _ done: @escaping (String
 final class GridCollectionView: NSCollectionView {
     var onActivate: ((IndexPath) -> Void)?
     private var downIP: IndexPath?
-    private var downPoint: NSPoint = .zero
-    private var didDrag = false
 
-    // NSCollectionView.mouseDown is NOT modal (unlike NSTableView): it returns
-    // promptly and drags are driven by later mouseDragged events. So we track the
-    // gesture ourselves — navigate only on a clean mouse-up with no drag, which
-    // leaves the built-in reorder/move drag path free (see ClickableRow for the
-    // same idiom).
+    // A single click on a tile opens it. (Drag-and-drop / reorder were removed, so
+    // there's no gesture tracking — just press-then-release on the same item.)
     override func mouseDown(with event: NSEvent) {
-        downPoint = event.locationInWindow
         downIP = indexPathForItem(at: convert(event.locationInWindow, from: nil))
-        didDrag = false
         super.mouseDown(with: event)
     }
-    override func mouseDragged(with event: NSEvent) {
-        if !didDrag {
-            let p = event.locationInWindow
-            if hypot(p.x - downPoint.x, p.y - downPoint.y) > 4 { didDrag = true }
-        }
-        super.mouseDragged(with: event)
-    }
     override func mouseUp(with event: NSEvent) {
-        let ip = downIP, dragged = didDrag
+        let ip = downIP
         super.mouseUp(with: event)
-        if let ip = ip, !dragged, event.clickCount == 1 { onActivate?(ip) }
+        let upIP = indexPathForItem(at: convert(event.locationInWindow, from: nil))
+        if let ip = ip, ip == upIP, event.clickCount == 1 { onActivate?(ip) }
         downIP = nil
-        didDrag = false
     }
 }
 
@@ -1960,57 +1964,6 @@ final class CardFlowLayout: NSCollectionViewLayout {
         elementKind == NSCollectionView.elementKindSectionHeader ? headerAttrs[indexPath] : nil
     }
 
-    // Drag/drop needs the layout to translate the cursor into a drop position. The bare
-    // NSCollectionViewLayout base returns nil for both of these — which is why drop-on-folder
-    // AND reorder broke the moment we stopped subclassing NSCollectionViewFlowLayout (it
-    // synthesized them for free). Re-supply them from our cached item/header frames.
-
-    // Translate the hover point into a drop target. The returned attribute's CATEGORY is
-    // the decision: an ITEM attribute proposes a drop ONTO that item (.on — e.g. file a
-    // skill into a folder), an INTER-ITEM-GAP attribute proposes an insertion (.before —
-    // i.e. reorder). So we must return a gap for most of the surface and an item only over
-    // its centre — otherwise every drop is an ".on" and reorder can never happen (which is
-    // exactly what was broken: folders nested into whatever was adjacent, nothing reordered).
-    override func layoutAttributesForDropTarget(at point: NSPoint) -> NSCollectionViewLayoutAttributes? {
-        // Over an item: centre third → drop ONTO it; left/right thirds → reorder gap.
-        for (ip, a) in itemAttrs where a.frame.contains(point) {
-            let f = a.frame
-            let edge = f.width * 0.34
-            if point.x <= f.minX + edge { return layoutAttributesForInterItemGap(before: ip) }
-            if point.x >= f.maxX - edge { return layoutAttributesForInterItemGap(before: IndexPath(item: ip.item + 1, section: ip.section)) }
-            return a
-        }
-        // Between items / margins: snap to the nearest reorder gap (insert before or after
-        // the nearest item depending on which side of its centre we're on).
-        var bestIP: IndexPath?
-        var bestDist = CGFloat.greatestFiniteMagnitude
-        for (ip, a) in itemAttrs {
-            let d = hypot(a.frame.midX - point.x, a.frame.midY - point.y)
-            if d < bestDist { bestDist = d; bestIP = ip }
-        }
-        guard let ip = bestIP, let f = itemAttrs[ip]?.frame else { return nil }
-        return layoutAttributesForInterItemGap(before: point.x > f.midX ? IndexPath(item: ip.item + 1, section: ip.section) : ip)
-    }
-
-    // Drop BETWEEN items (reorder): a thin gap attribute at the leading edge of the item
-    // BEFORE which the dragged item would be inserted. Without it AppKit can't offer a
-    // `.before` drop position, so reordering did nothing.
-    override func layoutAttributesForInterItemGap(before indexPath: IndexPath) -> NSCollectionViewLayoutAttributes? {
-        let gap = NSCollectionViewLayoutAttributes(forInterItemGapBefore: indexPath)
-        if let a = itemAttrs[indexPath] {
-            // Gap sits just to the LEFT of the target item.
-            gap.frame = NSRect(x: a.frame.minX - interitem, y: a.frame.minY, width: interitem, height: a.frame.height)
-        } else if indexPath.item > 0,
-                  let prev = itemAttrs[IndexPath(item: indexPath.item - 1, section: indexPath.section)] {
-            // "Before the end" of a section: gap sits just to the RIGHT of the last item.
-            gap.frame = NSRect(x: prev.frame.maxX, y: prev.frame.minY, width: interitem, height: prev.frame.height)
-        } else if let h = headerAttrs[IndexPath(item: 0, section: indexPath.section)] {
-            // Empty section: park the gap just under its header so the gesture never stalls.
-            gap.frame = NSRect(x: inset.left, y: h.frame.maxY, width: interitem, height: 1)
-        }
-        return gap
-    }
-
     // Re-lay-out only when the visible width changes (not on vertical scroll).
     override func shouldInvalidateLayout(forBoundsChange newBounds: NSRect) -> Bool {
         guard let cv = collectionView else { return false }
@@ -2081,8 +2034,6 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
         collectionView.register(SectionHeaderView.self,
                                 forSupplementaryViewOfKind: NSCollectionView.elementKindSectionHeader,
                                 withIdentifier: SectionHeaderView.id)
-        collectionView.registerForDraggedTypes([skelfEntryType])
-        collectionView.setDraggingSourceOperationMask(.move, forLocal: true)
         collectionView.onActivate = { [weak self] ip in self?.activate(ip) }
         gridScroll.documentView = collectionView
 
@@ -2113,10 +2064,18 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
 
     /// Called by the SwiftUI host whenever search / data changes. (CardFlowLayout
     /// handles responsive resizing itself, live, via shouldInvalidateLayout.)
-    func apply(query: String, filter: Int, token: Int) {
-        guard query != self.query || token != lastToken else { return }
-        self.query = query; lastToken = token
-        if isViewLoaded { reload() }
+    private var lastFavToken = -1
+    func apply(query: String, filter: Int, token: Int, favToken: Int) {
+        let favChanged = favToken != lastFavToken
+        // A favorite toggle must REBUILD when the favorites set is what's on screen — the
+        // home grid (its Favorites count card) or the Favorites folder itself — but only
+        // needs a light in-place star refresh inside ordinary folders.
+        let favNeedsRebuild = favChanged && (folderId == favoritesFolderId || folderId == model.folders.rootId)
+        let rebuild = query != self.query || token != lastToken || favNeedsRebuild
+        self.query = query; lastToken = token; lastFavToken = favToken
+        guard isViewLoaded else { return }
+        if rebuild { reload() }
+        else if favChanged { refreshFavorites() }
     }
 
     func reload() { buildEntries(); collectionView.reloadData() }
@@ -2141,12 +2100,30 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
 
     private func buildEntries() {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+
+        // The virtual Favorites folder: every favorited skill, wherever it lives.
+        if folderId == favoritesFolderId {
+            let favs = model.store.skills.filter { model.favorites.isFavorite($0.id) && skillMatches($0, q) }
+            var s: [(title: String, items: [GridEntry])] = []
+            let on = favs.filter { $0.enabled }, off = favs.filter { !$0.enabled }
+            if !on.isEmpty { s.append(("Skills", on.map { .skill($0) })) }
+            if !off.isEmpty { s.append(("Off Skills", off.map { .skill($0) })) }
+            sections = s
+            return
+        }
+
         let folders = model.folders.childFolders(of: folderId).filter { q.isEmpty || $0.name.lowercased().contains(q) }
         let here = model.folders.skillIds(in: folderId).compactMap { id in model.store.skills.first { $0.id == id } }
         let skills = here.filter { $0.enabled && skillMatches($0, q) }     // stored order; favoriting never reorders
         let off = here.filter { !$0.enabled && skillMatches($0, q) }
+        var folderEntries: [GridEntry] = folders.map { .folder($0) }
+        // Pin the special Favorites folder first on the home grid (not while searching).
+        if folderId == model.folders.rootId && q.isEmpty {
+            let favCount = model.store.skills.filter { model.favorites.isFavorite($0.id) }.count
+            folderEntries.insert(.favorites(favCount), at: 0)
+        }
         var s: [(title: String, items: [GridEntry])] = []
-        if !folders.isEmpty { s.append(("Folders", folders.map { .folder($0) })) }
+        if !folderEntries.isEmpty { s.append(("Folders", folderEntries)) }
         if !skills.isEmpty { s.append(("Skills", skills.map { .skill($0) })) }
         if !off.isEmpty { s.append(("Off Skills", off.map { .skill($0) })) }
         sections = s
@@ -2160,6 +2137,7 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
     private func activate(_ ip: IndexPath) {
         switch entry(at: ip) {
         case .folder(let n): (collectionView.item(at: ip) as? FolderGridItem)?.pressPop(); onOpenFolder?(n.id)
+        case .favorites: (collectionView.item(at: ip) as? FolderGridItem)?.pressPop(); onOpenFolder?(favoritesFolderId)
         case .skill(let s): (collectionView.item(at: ip) as? SkillGridItem)?.pressPop(); onOpenSkill?(s.id)
         case .none: break
         }
@@ -2187,6 +2165,11 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
 
     func collectionView(_ cv: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
         switch entry(at: indexPath) {
+        case .favorites(let count):
+            let item = cv.makeItem(withIdentifier: folderItemID, for: indexPath)
+            (item as? FolderGridItem)?.configureFavorites(count: count)
+            item.view.menu = nil
+            return item
         case .folder(let node):
             let item = cv.makeItem(withIdentifier: folderItemID, for: indexPath)
             if let folder = item as? FolderGridItem {
@@ -2218,76 +2201,6 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
 
     private func popMenu(_ menu: NSMenu, at anchor: NSView) {
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 2), in: anchor)
-    }
-
-    // --- drag & drop / reorder ---
-    func collectionView(_ cv: NSCollectionView, canDragItemsAt indexPaths: Set<IndexPath>, with event: NSEvent) -> Bool {
-        return query.trimmingCharacters(in: .whitespaces).isEmpty
-    }
-
-    func collectionView(_ cv: NSCollectionView, pasteboardWriterForItemAt indexPath: IndexPath) -> NSPasteboardWriting? {
-        guard let e = entry(at: indexPath) else { return nil }
-        let item = NSPasteboardItem()
-        switch e {
-        case .folder(let n): item.setString("folder:\(n.id)", forType: skelfEntryType)
-        case .skill(let s): item.setString("skill:\(s.id)", forType: skelfEntryType)
-        }
-        return item
-    }
-
-    func collectionView(_ cv: NSCollectionView,
-                        validateDrop draggingInfo: NSDraggingInfo,
-                        proposedIndexPath proposedDropIndexPath: AutoreleasingUnsafeMutablePointer<NSIndexPath>,
-                        dropOperation proposedDropOperation: UnsafeMutablePointer<NSCollectionView.DropOperation>) -> NSDragOperation {
-        let idx = proposedDropIndexPath.pointee as IndexPath
-        let draggingFolder = (draggingInfo.draggingPasteboard.pasteboardItems?.first?
-            .string(forType: skelfEntryType)?.hasPrefix("folder:")) ?? false
-        if proposedDropOperation.pointee == .on {
-            // Keep ".on" ONLY for a skill dropped onto a folder (file it in). A folder
-            // dropped onto a folder, or anything onto a skill, becomes a reorder — so
-            // folders never nest by accident and a centre-drop still reorders.
-            if case .folder = entry(at: idx), !draggingFolder { return .move }
-            proposedDropOperation.pointee = .before
-        }
-        // Reorder (.before) is only meaningful WITHIN the matching kind. Reject a skill
-        // dropped at a folder gap (or a folder at a skill gap) so it can't silently jump to
-        // the end of its own list — the drop indicator then only shows where it makes sense.
-        switch entry(at: idx) {
-        case .folder where !draggingFolder: return []
-        case .skill where draggingFolder: return []
-        default: break   // matching kind, or .none (end-of-section gap) → allow
-        }
-        return .move
-    }
-
-    func collectionView(_ cv: NSCollectionView, acceptDrop draggingInfo: NSDraggingInfo,
-                        indexPath: IndexPath, dropOperation: NSCollectionView.DropOperation) -> Bool {
-        guard let pbItem = draggingInfo.draggingPasteboard.pasteboardItems?.first,
-              let str = pbItem.string(forType: skelfEntryType) else { return false }
-        let comps = str.split(separator: ":", maxSplits: 1).map(String.init)
-        guard comps.count == 2 else { return false }
-        let isFolder = comps[0] == "folder"
-        let draggedId = comps[1]
-
-        if dropOperation == .on, case .folder(let target) = entry(at: indexPath) {
-            if isFolder { model.folders.moveFolder(draggedId, to: target.id) }
-            else { model.folders.moveSkill(draggedId, from: folderId, to: target.id) }
-            Sound.play(.move)
-            return true
-        }
-        let anchor = anchorId(forKind: isFolder, at: indexPath)
-        if isFolder { model.folders.reorderFolder(draggedId, in: folderId, before: anchor) }
-        else { model.folders.reorderSkill(draggedId, in: folderId, before: anchor) }
-        Sound.play(.move)
-        return true
-    }
-
-    private func anchorId(forKind isFolder: Bool, at ip: IndexPath) -> String? {
-        switch entry(at: ip) {
-        case .folder(let n): return isFolder ? n.id : nil
-        case .skill(let s): return isFolder ? nil : s.id
-        case .none: return nil
-        }
     }
 
     // --- per-tile context menus ---
@@ -2402,10 +2315,13 @@ final class SkelfModel {
     func bumpReload() { reloadToken &+= 1 }
     func bumpFavorites() { favoritesToken &+= 1 }
     func skill(_ id: String) -> Skill? { store.skills.first { $0.id == id } }
-    func folderName(_ id: String) -> String { folders.node(id)?.name ?? "Folder" }
+    func folderName(_ id: String) -> String {
+        id == favoritesFolderId ? "Favorites" : (folders.node(id)?.name ?? "Folder")
+    }
 
     func openSkill(_ id: String) { if skill(id) != nil { path = [.skill(id)] } }
     func enterFolder(_ id: String) {
+        if id == favoritesFolderId { path = [.folder(favoritesFolderId)]; return }
         guard folders.node(id) != nil else { return }
         path = folders.path(to: id).map { $0.id }.filter { $0 != folders.rootId }.map { Route.folder($0) }
     }
@@ -2456,16 +2372,19 @@ struct FolderScreen: View {
             .navigationTitle(folderId == model.folders.rootId ? "Skelf" : model.folderName(folderId))
             .searchable(text: $query, prompt: "Search this folder")
             .toolbar {
-                if hasClip {
-                    ToolbarItem {
-                        Button { model.pasteInto(folderId) } label: {
-                            Label("Paste \(clipName)", systemImage: "doc.on.clipboard")
+                // The virtual Favorites folder can't hold sub-folders or pasted items.
+                if folderId != favoritesFolderId {
+                    if hasClip {
+                        ToolbarItem {
+                            Button { model.pasteInto(folderId) } label: {
+                                Label("Paste \(clipName)", systemImage: "doc.on.clipboard")
+                            }
                         }
                     }
-                }
-                ToolbarItem {
-                    Button { model.newFolder(in: folderId) } label: {
-                        Label("New Folder", systemImage: "folder.badge.plus")
+                    ToolbarItem {
+                        Button { model.newFolder(in: folderId) } label: {
+                            Label("New Folder", systemImage: "folder.badge.plus")
+                        }
                     }
                 }
             }
@@ -2516,8 +2435,7 @@ struct GridRepresentable: NSViewControllerRepresentable {
     func updateNSViewController(_ vc: GridViewController, context: Context) {
         vc.onOpenSkill = onOpenSkill
         vc.onOpenFolder = onOpenFolder
-        vc.apply(query: query, filter: filter, token: token)
-        vc.refreshFavorites()   // favorite-only changes: update stars in place, no reload
+        vc.apply(query: query, filter: filter, token: token, favToken: favToken)
     }
 }
 
@@ -2561,49 +2479,13 @@ final class ActionButton: NSButton {
     @objc func fire() { onAction?() }
 }
 
-final class ClickableRow: NSView, NSDraggingSource {
+final class ClickableRow: NSView {
     var onClick: (() -> Void)?
-    var dragPayload: String?           // "skill:<id>"; nil = not draggable
-    var onDrop: ((String) -> Bool)?    // accept a dropped payload; nil = not a drop target
 
     private var trackingArea: NSTrackingArea?
-    private var mouseDownPoint: NSPoint = .zero
-    private var didDrag = false
     private var hovering = false
-    private var dropActive = false
 
-    func enableDrops() { registerForDraggedTypes([skelfEntryType]) }
-
-    // click vs. drag
-    override func mouseDown(with event: NSEvent) { mouseDownPoint = event.locationInWindow; didDrag = false }
-    override func mouseDragged(with event: NSEvent) {
-        guard let payload = dragPayload, !didDrag else { return }
-        let p = event.locationInWindow
-        if hypot(p.x - mouseDownPoint.x, p.y - mouseDownPoint.y) > 5 {
-            didDrag = true
-            let pbItem = NSPasteboardItem()
-            pbItem.setString(payload, forType: skelfEntryType)
-            let di = NSDraggingItem(pasteboardWriter: pbItem)
-            di.setDraggingFrame(bounds, contents: snapshot())
-            beginDraggingSession(with: [di], event: event, source: self)
-        }
-    }
-    override func mouseUp(with event: NSEvent) { if !didDrag { onClick?() }; didDrag = false }
-    func draggingSession(_ s: NSDraggingSession, sourceOperationMaskFor c: NSDraggingContext) -> NSDragOperation { .move }
-
-    // drop target
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard onDrop != nil, sender.draggingPasteboard.availableType(from: [skelfEntryType]) != nil else { return [] }
-        dropActive = true; updateBackground(); return .move
-    }
-    override func draggingExited(_ sender: NSDraggingInfo?) { dropActive = false; updateBackground() }
-    override func draggingEnded(_ sender: NSDraggingInfo) { dropActive = false; updateBackground() }
-    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { onDrop != nil }
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        dropActive = false; updateBackground()
-        guard let s = sender.draggingPasteboard.pasteboardItems?.first?.string(forType: skelfEntryType) else { return false }
-        return onDrop?(s) ?? false
-    }
+    override func mouseUp(with event: NSEvent) { onClick?() }
 
     // hover
     override func updateTrackingAreas() {
@@ -2618,18 +2500,10 @@ final class ClickableRow: NSView, NSDraggingSource {
 
     private func updateBackground() {
         wantsLayer = true
-        layer?.cornerRadius = dropActive ? 8 : 0
-        if dropActive { layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.30).cgColor }
-        else if hovering { layer?.backgroundColor = NSColor.unemphasizedSelectedContentBackgroundColor.withAlphaComponent(0.7).cgColor }
-        else { layer?.backgroundColor = NSColor.clear.cgColor }
-    }
-
-    private func snapshot() -> NSImage {
-        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return NSImage(size: bounds.size) }
-        cacheDisplay(in: bounds, to: rep)
-        let img = NSImage(size: bounds.size)
-        img.addRepresentation(rep)
-        return img
+        layer?.cornerRadius = 0
+        layer?.backgroundColor = hovering
+            ? NSColor.unemphasizedSelectedContentBackgroundColor.withAlphaComponent(0.7).cgColor
+            : NSColor.clear.cgColor
     }
 }
 
@@ -3132,7 +3006,6 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         let sub = skill.enabled ? skill.initiator : "\(skill.initiator)  ·  off"
         let row = makeRow(icon: monogram(skill), title: skill.name, subtitle: sub, dim: !skill.enabled,
                           trailing: copyBtn) { [weak self] in self?.onOpen?(skill) }
-        row.dragPayload = "skill:\(skill.id)"     // drag a favorite onto a folder row to file it
         return row
     }
 
@@ -3150,27 +3023,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         parts.append("\(s) skill\(s == 1 ? "" : "s")")
         let row = makeRow(icon: folderIcon(), title: node.name, subtitle: parts.joined(separator: " · "),
                           dim: false, trailing: chev) { [weak self] in self?.enter(node.id) }
-        row.enableDrops()                          // drop a skill/folder here to move it in
-        row.onDrop = { [weak self] payload in self?.handlePopoverDrop(payload, into: node.id) ?? false }
         return row
-    }
-
-    private func handlePopoverDrop(_ payload: String, into folderId: String) -> Bool {
-        let comps = payload.split(separator: ":", maxSplits: 1).map(String.init)
-        guard comps.count == 2 else { return false }
-        let folderName = folders.node(folderId)?.name ?? "folder"
-        if comps[0] == "folder" {
-            guard comps[1] != folderId, !folders.isDescendant(folderId, of: comps[1]) else { return false }
-            let name = folders.node(comps[1])?.name ?? "folder"
-            folders.moveFolder(comps[1], to: folderId)
-            showToast("Moved “\(name)” → \(folderName)")
-        } else {
-            let name = store.skills.first { $0.id == comps[1] }?.name ?? comps[1]
-            folders.moveSkill(comps[1], from: currentId, to: folderId)
-            showToast("Moved \(name) → \(folderName)")
-        }
-        Sound.play(.move)
-        return true
     }
 
     private func monogram(_ skill: Skill) -> NSView {
