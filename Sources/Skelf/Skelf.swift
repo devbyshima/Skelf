@@ -734,6 +734,7 @@ final class ArtStore {
     private var mem: [String: NSImage] = [:]
     private var failed: Set<String> = []
     private var inflight: Set<String> = []
+    private var waiters: [String: [(NSImage) -> Void]] = [:]   // cards awaiting an in-flight download
     private let dir: URL
 
     init() {
@@ -772,21 +773,27 @@ final class ArtStore {
         if let i = cached(id) { completion(i); return }
         guard let entry = map[id], let url = URL(string: entry.url) else { completion(nil); return }
         if failed.contains(id) { completion(nil); return }
+        // Queue this card's callback — every card awaiting the same in-flight image is
+        // notified when it lands (NSCollectionView recycles cells, so the card that
+        // started the download is often gone by the time it finishes).
+        waiters[id, default: []].append { completion($0) }
         if inflight.contains(id) { return }
         inflight.insert(id)
         var req = URLRequest(url: url)
         req.setValue("Skelf/1.0 (skill art)", forHTTPHeaderField: "User-Agent")
+        // The Art Institute of Chicago's IIIF image server requires this header (else 403).
+        req.setValue("Skelf macOS (fulltimestudio29@gmail.com)", forHTTPHeaderField: "AIC-User-Agent")
         URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.inflight.remove(id)
+                let cbs = self.waiters.removeValue(forKey: id) ?? []
                 if let data = data, let img = NSImage(data: data) {
                     try? data.write(to: self.diskURL(id))
                     self.mem[id] = img
-                    completion(img)
+                    cbs.forEach { $0(img) }
                 } else {
                     self.failed.insert(id)
-                    completion(nil)
                 }
             }
         }.resume()
@@ -1801,12 +1808,15 @@ final class SkillDetailView: NSView {
         artToken += 1
         let token = artToken
         let creator = skill.source.contains("/") ? skill.source.split(separator: "/").first.map(String.init) : nil
-        banner.setGradient(skill.name)
-        if let creator = creator {
-            if let img = AvatarStore.shared.cached(creator) { banner.setAvatar(img) }
-            else { AvatarStore.shared.fetch(creator) { [weak self] img in
+        // The header banner wears the skill's own art (same as its card); the Source
+        // sidebar below keeps the creator avatar.
+        if let img = ArtStore.shared.cached(skill.id) { banner.setAvatar(img) }
+        else {
+            banner.setThemedFallback(skill)
+            ArtStore.shared.fetch(skill.id) { [weak self] img in
                 guard let self = self, self.artToken == token, let img = img else { return }
-                self.banner.setAvatar(img) } }
+                self.banner.setAvatar(img)
+            }
         }
         bannerName.stringValue = skill.name
         bannerPillLabel.stringValue = skill.initiator
@@ -2457,6 +2467,9 @@ struct SkelfRootView: View {
                     }
                 }
         }
+        // The hosted AppKit grid can momentarily report a tiny fitting size during a
+        // reload; without a floor the hosting controller shrinks the whole window to it.
+        .frame(minWidth: 680, minHeight: 460)
     }
 }
 
@@ -3461,6 +3474,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             w.contentViewController = host
             w.title = "Skelf"
             w.minSize = NSSize(width: 680, height: 460)
+            w.contentMinSize = NSSize(width: 680, height: 460)   // also floor the content size
             w.setContentSize(NSSize(width: 920, height: 660))
             w.center()
             w.isReleasedWhenClosed = false

@@ -1,0 +1,237 @@
+{
+ "12-principles-of-animation": {
+  "url": "https://www.artic.edu/iiif/2/ed1b3063-8ce3-d4bc-50cb-b96f13f015e2/full/843,/0/default.jpg",
+  "by": "Dorothea and Francesca — Cecilia Beaux",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "ask-matt": {
+  "url": "https://www.artic.edu/iiif/2/091aa543-c904-baa9-c171-c5bf562de9af/full/843,/0/default.jpg",
+  "by": "Hercules at the Crossroads (Jealousy) — Albrecht Dürer",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "caveman": {
+  "url": "https://www.artic.edu/iiif/2/8a0e4ac9-43ea-bc3e-884b-ee27f8a10501/full/843,/0/default.jpg",
+  "by": "Saint George and the Dragon — Bernat Martorell",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "codebase-design": {
+  "url": "https://www.artic.edu/iiif/2/47b28b55-ced6-502d-f111-fbe0033f8dc8/full/843,/0/default.jpg",
+  "by": "Chicago Stock Exchange Trading Room: Reconstruction at the Art Institute of Chicago — Adler & Sullivan, Architects",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "decision-mapping": {
+  "url": "https://www.artic.edu/iiif/2/59bf5216-383d-c2d4-912a-f8cfcbdaa55a/full/843,/0/default.jpg",
+  "by": "Noah Smith — Ralph Earl",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "design-an-interface": {
+  "url": "https://www.artic.edu/iiif/2/f5c621e6-755e-c2e7-e087-d0dae0ed9ea0/full/843,/0/default.jpg",
+  "by": "Study for The Horse Fair — Rosa Bonheur",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "diagnose": {
+  "url": "https://www.artic.edu/iiif/2/48769974-a3ae-1c47-f431-472d7f6e395a/full/843,/0/default.jpg",
+  "by": "Design: Facial Anatomy from Encyclopédie — A. J. Defehrt",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "diagnosing-bugs": {
+  "url": "https://www.artic.edu/iiif/2/d3be4b38-56f4-e2ce-ef06-d9b73554c44f/full/843,/0/default.jpg",
+  "by": "Comparative Anatomy — Isaac Robert Cruikshank",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "domain-modeling": {
+  "url": "https://www.artic.edu/iiif/2/bb513b07-82c7-cdd3-cca3-1fe729bc82e5/full/843,/0/default.jpg",
+  "by": "Sampler (Map) — Unknown",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "edit-article": {
+  "url": "https://www.artic.edu/iiif/2/54f0b704-7108-5b91-1d0f-585758267fb4/full/843,/0/default.jpg",
+  "by": "Saint Benedict Presenting his Rule to Benedictine and Cistercian Monks in a Historiated Initial \"O\" from a Choirbook — Martino di Bartolomeo di Biagio",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "generating-sounds-with-ai": {
+  "url": "https://www.artic.edu/iiif/2/c8d341af-c3b2-3d04-da9f-42700256c7b7/full/843,/0/default.jpg",
+  "by": "The Hurdy-Gurdy Player — Cornelis Visscher",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "git-guardrails-claude-code": {
+  "url": "https://www.artic.edu/iiif/2/1b605198-afe5-1052-3c7b-0c08734238e1/full/843,/0/default.jpg",
+  "by": "Landscape with Rock and Fortress — Domenico Gargiuli (Micco Spadaro)",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "grill-me": {
+  "url": "https://www.artic.edu/iiif/2/7b7a6f39-1cd8-ea2f-9811-18b0e23edac0/full/843,/0/default.jpg",
+  "by": "Self-Portrait — Walter Shirlaw",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "grill-with-docs": {
+  "url": "https://www.artic.edu/iiif/2/04798849-7fce-c43e-1071-1bd8237be10f/full/843,/0/default.jpg",
+  "by": "The Animal-Tamer before the Tribunal — Henri de Toulouse-Lautrec",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "grilling": {
+  "url": "https://www.artic.edu/iiif/2/13bb7117-5115-b409-1dbb-1d9c1d70a5c9/full/843,/0/default.jpg",
+  "by": "Martin Vanden Bogaert Desjardins — Gérard Edelinck",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "handoff": {
+  "url": "https://www.artic.edu/iiif/2/3f00ff8a-3e59-8711-232f-ab2f61a3115d/full/843,/0/default.jpg",
+  "by": "Relay of Dogs in the Desert — Paul Adolphe Rajon",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "humanizer": {
+  "url": "https://www.artic.edu/iiif/2/c95d58bf-fe9e-e5bb-2c71-ab8bad984759/full/843,/0/default.jpg",
+  "by": "Portrait of an Artist — Follower of Frans Hals",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "implement": {
+  "url": "https://www.artic.edu/iiif/2/e6068e4f-64fb-e10c-9347-84cf4d7b4fbb/full/843,/0/default.jpg",
+  "by": "Blacksmith — Eugène Delacroix",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "improve-codebase-architecture": {
+  "url": "https://www.artic.edu/iiif/2/848cb78e-f134-ddaa-9460-88b00bf36e7d/full/843,/0/default.jpg",
+  "by": "Landscape Panorama — Camille Pissarro",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "mastering-animate-presence": {
+  "url": "https://www.artic.edu/iiif/2/4a04138f-43d8-cd9f-5ac4-478cd8828210/full/843,/0/default.jpg",
+  "by": "Trompe-l'Oeil Still Life with a Flower Garland and a Curtain — Adriaen van der Spelt",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "migrate-to-shoehorn": {
+  "url": "https://www.artic.edu/iiif/2/af20d1a4-3a98-4bbf-8e6c-4a1719a9b601/full/843,/0/default.jpg",
+  "by": "La Caravane du Caire (The Caravan from Cairo) (Furnishing Fabric) — Petitpierre et Cie.",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "morphing-icons": {
+  "url": "https://www.artic.edu/iiif/2/c47fb63f-45f3-b4f5-4239-c9b03585fad8/full/843,/0/default.jpg",
+  "by": "Illustration from Metamorphosis by Ovidius, plate 72 from Woodcuts from Books of the XVI Century — Unknown artist",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "obsidian-vault": {
+  "url": "https://www.artic.edu/iiif/2/7f0c1692-cd8a-ca14-e70a-b8252f55c453/full/843,/0/default.jpg",
+  "by": "Library Ladder — William France",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "product-marketing": {
+  "url": "https://www.artic.edu/iiif/2/6aaa3537-abbf-f49e-877f-4d8e8e4d50c2/full/843,/0/default.jpg",
+  "by": "The Road to Market — Constant Troyon",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "prototype": {
+  "url": "https://www.artic.edu/iiif/2/ec14e825-ed02-c8a5-c25d-c04cbbc6a471/full/843,/0/default.jpg",
+  "by": "Sketch for The Revolt of Cairo — Anne-Louis Girodet de Roussy-Trioson",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "pseudo-elements": {
+  "url": "https://www.artic.edu/iiif/2/24f95cb3-6020-6476-806e-dfd00e9c4369/full/843,/0/default.jpg",
+  "by": "Articulated Dragon — School of Myochin",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "qa": {
+  "url": "https://www.artic.edu/iiif/2/441ff42f-7329-1179-3735-e68db890c899/full/843,/0/default.jpg",
+  "by": "Royal Horse Inspection — 'Aliquli Jabbadar",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "request-refactor-plan": {
+  "url": "https://www.artic.edu/iiif/2/d508b537-7c5c-6fc1-9514-e7d010f15e5c/full/843,/0/default.jpg",
+  "by": "Fragment — Wari",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "resolving-merge-conflicts": {
+  "url": "https://www.artic.edu/iiif/2/ea1e120f-2a56-99a8-99d8-ea824d466d65/full/843,/0/default.jpg",
+  "by": "Bird's Nest and Ferns — Fidelia Bridges",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "review": {
+  "url": "https://www.artic.edu/iiif/2/f78addab-4d3a-f87c-4c83-7eae824c7504/full/843,/0/default.jpg",
+  "by": "Yang Pu Moving His Family — Unknown",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "scaffold-exercises": {
+  "url": "https://www.artic.edu/iiif/2/ab107179-7106-937e-7676-e0263b02e530/full/843,/0/default.jpg",
+  "by": "Remembrance of Italy — Jean Baptiste Camille Corot",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "setup-matt-pocock-skills": {
+  "url": "https://www.artic.edu/iiif/2/b6cd84f4-ae93-0651-1f4b-045ada876e98/full/843,/0/default.jpg",
+  "by": "Foundation Deposit: Bound Ox — Ancient Egyptian",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "setup-pre-commit": {
+  "url": "https://www.artic.edu/iiif/2/1753b638-d4fb-8e45-3db9-92dde7f053da/full/843,/0/default.jpg",
+  "by": "Priest and Boy — Lawrence Carmichael Earle",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "sounds-on-the-web": {
+  "url": "https://www.artic.edu/iiif/2/7f1ea423-7538-3bc7-3d4a-0766522ab62f/full/843,/0/default.jpg",
+  "by": "The Family Concert — Jan Steen",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "tdd": {
+  "url": "https://www.artic.edu/iiif/2/2a2d4262-05f6-da08-b1e6-60d88461b57e/full/843,/0/default.jpg",
+  "by": "Geometry — Étienne Delaune",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "teach": {
+  "url": "https://www.artic.edu/iiif/2/2d484387-2509-5e8e-2c43-22f9981972eb/full/843,/0/default.jpg",
+  "by": "A Sunday on La Grande Jatte — 1884 — Georges Seurat",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "to-issues": {
+  "url": "https://www.artic.edu/iiif/2/dac4ead1-77cd-a46f-5c35-9f8b5132525d/full/843,/0/default.jpg",
+  "by": "The Harvesters — Léon Augustin Lhermitte",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "to-prd": {
+  "url": "https://www.artic.edu/iiif/2/86296102-d04c-8413-34e0-36d96668c0dd/full/843,/0/default.jpg",
+  "by": "Decorated Initial \"G\" in Pink with Curling Leaves from a Manuscript — Unknown",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "to-spring-or-not-to-spring": {
+  "url": "https://www.artic.edu/iiif/2/3d705987-f3b4-623a-6264-b0b177f748a9/full/843,/0/default.jpg",
+  "by": "Horatius Cocles Leaping into the Tiber — Albrecht Altdorfer",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "triage": {
+  "url": "https://www.artic.edu/iiif/2/2975fb96-1d1f-af7a-045e-1d1d1e3d0566/full/843,/0/default.jpg",
+  "by": "Ephraim Bonus, Jewish Physician — Rembrandt van Rijn",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "ubiquitous-language": {
+  "url": "https://www.artic.edu/iiif/2/9b9ec959-fbdc-9eae-cdfd-be8befe169ab/full/843,/0/default.jpg",
+  "by": "Lion of the Atlas Mountains — Eugène Delacroix",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "write-a-skill": {
+  "url": "https://www.artic.edu/iiif/2/9d6e3330-2f7f-8e3f-7246-69f44624ec66/full/843,/0/default.jpg",
+  "by": "Vulcan's Forge — Luca Cambiaso",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "writing-beats": {
+  "url": "https://www.artic.edu/iiif/2/a6d1df5f-8455-5f5b-08ad-0b43e97b0770/full/843,/0/default.jpg",
+  "by": "The Voyage of Urien (Le Voyage d'Urien) — Maurice Denis",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "writing-fragments": {
+  "url": "https://www.artic.edu/iiif/2/30a17640-e9e9-7990-1f7c-8fc18d06464e/full/843,/0/default.jpg",
+  "by": "Mosaic Fragment with Man Leading a Giraffe — Byzantine",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "writing-great-skills": {
+  "url": "https://www.artic.edu/iiif/2/69f25cba-e78d-061b-4cc1-b8fe66b02f28/full/843,/0/default.jpg",
+  "by": "Cauldron — Unknown",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "writing-shape": {
+  "url": "https://www.artic.edu/iiif/2/caf7fb08-39ef-7bd8-b81a-181ee31cc324/full/843,/0/default.jpg",
+  "by": "James Vibert, Sculptor — Ferdinand Hodler",
+  "license": "Public domain · Art Institute of Chicago"
+ },
+ "zoom-out": {
+  "url": "https://www.artic.edu/iiif/2/b2228199-cf8f-41a1-9482-b32e654b9011/full/843,/0/default.jpg",
+  "by": "Panorama from the Sasso — Claude Lorrain",
+  "license": "Public domain · Art Institute of Chicago"
+ }
+}
