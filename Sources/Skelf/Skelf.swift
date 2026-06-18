@@ -38,9 +38,26 @@ struct Skill: Hashable {
 
     var initiator: String { "/" + id }
     var skillMDPath: String { dirPath + "/SKILL.md" }
-    var githubURL: URL? {
+    var githubURL: URL? {                       // the repo root
         guard source.contains("/") else { return nil }
         return URL(string: "https://github.com/\(source)")
+    }
+    /// The skill's own page in its repo (its folder), not just the repo root.
+    var skillGithubURL: URL? {
+        guard source.contains("/") else { return nil }
+        var path = skillPath
+        for suffix in ["/SKILL.md", "SKILL.md"] where path.hasSuffix(suffix) {
+            path = String(path.dropLast(suffix.count)); break
+        }
+        path = path.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        return path.isEmpty
+            ? URL(string: "https://github.com/\(source)")
+            : URL(string: "https://github.com/\(source)/tree/main/\(path)")
+    }
+    /// The creator's GitHub profile.
+    var creatorGithubURL: URL? {
+        guard let owner = source.split(separator: "/").first else { return nil }
+        return URL(string: "https://github.com/\(owner)")
     }
 }
 
@@ -1304,7 +1321,8 @@ final class SkillDetailView: NSView {
     private let bannerPillLabel = NSTextField(labelWithString: "")
     private let bannerStatus = NSTextField(labelWithString: "")
 
-    private let bodyTextView = NSTextView()
+    private let summaryLabel = NSTextField(wrappingLabelWithString: "")
+    private let bodyLabel = NSTextField(wrappingLabelWithString: "")
     private let sidebarStack = NSStackView()
 
     override init(frame frameRect: NSRect) {
@@ -1360,26 +1378,95 @@ final class SkillDetailView: NSView {
         bodyRow.translatesAutoresizingMaskIntoConstraints = false
         addSubview(bodyRow)
 
-        // left: a real text view renders the SKILL.md (selectable, clickable links)
+        // left: a Summary + the SKILL.md inside a GitHub-style README card (scrolls)
         let leftScroll = NSScrollView()
         leftScroll.translatesAutoresizingMaskIntoConstraints = false
         leftScroll.hasVerticalScroller = true
         leftScroll.drawsBackground = false
         leftScroll.borderType = .noBorder
         bodyRow.addSubview(leftScroll)
-        bodyTextView.isEditable = false
-        bodyTextView.isSelectable = true
-        bodyTextView.drawsBackground = false
-        bodyTextView.textContainerInset = NSSize(width: 26, height: 24)
-        bodyTextView.isVerticallyResizable = true
-        bodyTextView.isHorizontallyResizable = false
-        bodyTextView.autoresizingMask = [.width]
-        bodyTextView.textContainer?.widthTracksTextView = true
-        bodyTextView.linkTextAttributes = [
-            .foregroundColor: NSColor.linkColor,
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-            .cursor: NSCursor.pointingHand]
-        leftScroll.documentView = bodyTextView
+        let leftClip = leftScroll.contentView
+        let leftDoc = FlippedView()
+        leftDoc.translatesAutoresizingMaskIntoConstraints = false
+        leftScroll.documentView = leftDoc
+        let leftStack = NSStackView()
+        leftStack.orientation = .vertical
+        leftStack.alignment = .leading
+        leftStack.spacing = 16
+        leftStack.translatesAutoresizingMaskIntoConstraints = false
+        leftDoc.addSubview(leftStack)
+
+        // Summary block (the description, pinned above the README)
+        let summaryHeader = NSTextField(labelWithString: "SUMMARY")
+        summaryHeader.font = .systemFont(ofSize: 11, weight: .semibold)
+        summaryHeader.textColor = .secondaryLabelColor
+        summaryLabel.font = .systemFont(ofSize: 14.5)
+        summaryLabel.textColor = .labelColor
+        summaryLabel.translatesAutoresizingMaskIntoConstraints = false
+        let summaryBlock = NSStackView(views: [summaryHeader, summaryLabel])
+        summaryBlock.orientation = .vertical; summaryBlock.alignment = .leading; summaryBlock.spacing = 6
+        summaryBlock.translatesAutoresizingMaskIntoConstraints = false
+        leftStack.addArrangedSubview(summaryBlock)
+
+        // GitHub-style README card: bordered, with a file-header bar, then the rendered body
+        let readmeCard = NSView()
+        readmeCard.wantsLayer = true
+        readmeCard.layer?.cornerRadius = 8
+        readmeCard.layer?.borderWidth = 1
+        readmeCard.layer?.borderColor = NSColor.separatorColor.cgColor
+        readmeCard.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+        readmeCard.layer?.masksToBounds = true
+        readmeCard.translatesAutoresizingMaskIntoConstraints = false
+        let hdr = NSView()
+        hdr.wantsLayer = true
+        hdr.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        hdr.translatesAutoresizingMaskIntoConstraints = false
+        let hdrIcon = NSImageView()
+        hdrIcon.image = NSImage(systemSymbolName: "book.closed", accessibilityDescription: nil)
+        hdrIcon.contentTintColor = .secondaryLabelColor
+        hdrIcon.translatesAutoresizingMaskIntoConstraints = false
+        let hdrLabel = NSTextField(labelWithString: "SKILL.md")
+        hdrLabel.font = .systemFont(ofSize: 12.5, weight: .semibold)
+        hdrLabel.textColor = .labelColor
+        hdrLabel.translatesAutoresizingMaskIntoConstraints = false
+        let hdrDivider = NSBox(); hdrDivider.boxType = .separator
+        hdrDivider.translatesAutoresizingMaskIntoConstraints = false
+        hdr.addSubview(hdrIcon); hdr.addSubview(hdrLabel)
+        readmeCard.addSubview(hdr); readmeCard.addSubview(hdrDivider)
+        bodyLabel.isSelectable = true
+        bodyLabel.translatesAutoresizingMaskIntoConstraints = false
+        readmeCard.addSubview(bodyLabel)
+        leftStack.addArrangedSubview(readmeCard)
+
+        NSLayoutConstraint.activate([
+            leftDoc.topAnchor.constraint(equalTo: leftClip.topAnchor),
+            leftDoc.leadingAnchor.constraint(equalTo: leftClip.leadingAnchor),
+            leftDoc.trailingAnchor.constraint(equalTo: leftClip.trailingAnchor),
+            leftDoc.widthAnchor.constraint(equalTo: leftClip.widthAnchor),
+            leftStack.topAnchor.constraint(equalTo: leftDoc.topAnchor, constant: 20),
+            leftStack.leadingAnchor.constraint(equalTo: leftDoc.leadingAnchor, constant: 24),
+            leftStack.trailingAnchor.constraint(equalTo: leftDoc.trailingAnchor, constant: -22),
+            leftStack.bottomAnchor.constraint(equalTo: leftDoc.bottomAnchor, constant: -24),
+            summaryBlock.widthAnchor.constraint(equalTo: leftStack.widthAnchor),
+            readmeCard.widthAnchor.constraint(equalTo: leftStack.widthAnchor),
+
+            hdr.topAnchor.constraint(equalTo: readmeCard.topAnchor),
+            hdr.leadingAnchor.constraint(equalTo: readmeCard.leadingAnchor),
+            hdr.trailingAnchor.constraint(equalTo: readmeCard.trailingAnchor),
+            hdr.heightAnchor.constraint(equalToConstant: 42),
+            hdrIcon.leadingAnchor.constraint(equalTo: hdr.leadingAnchor, constant: 16),
+            hdrIcon.centerYAnchor.constraint(equalTo: hdr.centerYAnchor),
+            hdrIcon.widthAnchor.constraint(equalToConstant: 15),
+            hdrLabel.leadingAnchor.constraint(equalTo: hdrIcon.trailingAnchor, constant: 8),
+            hdrLabel.centerYAnchor.constraint(equalTo: hdr.centerYAnchor),
+            hdrDivider.topAnchor.constraint(equalTo: hdr.bottomAnchor),
+            hdrDivider.leadingAnchor.constraint(equalTo: readmeCard.leadingAnchor),
+            hdrDivider.trailingAnchor.constraint(equalTo: readmeCard.trailingAnchor),
+            bodyLabel.topAnchor.constraint(equalTo: hdrDivider.bottomAnchor, constant: 18),
+            bodyLabel.leadingAnchor.constraint(equalTo: readmeCard.leadingAnchor, constant: 20),
+            bodyLabel.trailingAnchor.constraint(equalTo: readmeCard.trailingAnchor, constant: -20),
+            bodyLabel.bottomAnchor.constraint(equalTo: readmeCard.bottomAnchor, constant: -22),
+        ])
 
         // right: sticky sidebar (own scroll)
         let sidebarScroll = NSScrollView()
@@ -1524,21 +1611,15 @@ final class SkillDetailView: NSView {
         bannerStatus.stringValue = skill.enabled ? "● Enabled" : "○ Installed · off"
         bannerStatus.textColor = skill.enabled ? NSColor.systemGreen : NSColor.white.withAlphaComponent(0.8)
 
-        // left column: Summary + the GitHub-style SKILL.md
+        // left column: Summary + the GitHub-style SKILL.md card
         let raw = (try? String(contentsOfFile: skill.skillMDPath, encoding: .utf8)) ?? ""
         let (_, body) = splitFrontmatter(raw)
-        let doc = NSMutableAttributedString()
-        let hp = NSMutableParagraphStyle(); hp.paragraphSpacing = 6
-        doc.append(NSAttributedString(string: "SUMMARY\n", attributes: [
-            .font: NSFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: NSColor.secondaryLabelColor,
-            .kern: 0.5, .paragraphStyle: hp]))
-        let sp = NSMutableParagraphStyle(); sp.lineSpacing = 4; sp.paragraphSpacing = 16
-        doc.append(NSAttributedString(string: (skill.description.isEmpty ? "No description in SKILL.md." : skill.description) + "\n",
-            attributes: [.font: NSFont.systemFont(ofSize: 14.5), .foregroundColor: NSColor.labelColor, .paragraphStyle: sp]))
+        summaryLabel.stringValue = skill.description.isEmpty ? "No description in SKILL.md." : skill.description
         let bodyTrim = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !bodyTrim.isEmpty { doc.append(renderGitHubMarkdown(bodyTrim)) }
-        bodyTextView.textStorage?.setAttributedString(doc)
-        bodyTextView.scroll(.zero)
+        bodyLabel.attributedStringValue = bodyTrim.isEmpty
+            ? NSAttributedString(string: "This skill's SKILL.md has no content beyond its frontmatter.",
+                                 attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor])
+            : renderGitHubMarkdown(bodyTrim)
 
         rebuildSidebar(skill, isFavorite: isFavorite, creator: creator, token: token)
     }
@@ -1567,14 +1648,16 @@ final class SkillDetailView: NSView {
         let idRow = NSStackView(views: [avatar, nameCol])
         idRow.orientation = .horizontal; idRow.alignment = .centerY; idRow.spacing = 10
         idRow.translatesAutoresizingMaskIntoConstraints = false
-        let ghBtn = sidebarButton("View on GitHub", "arrow.up.right.square", #selector(githubTapped))
-        ghBtn.isEnabled = skill.githubURL != nil
-        let srcStack = NSStackView(views: [idRow, ghBtn])
-        srcStack.orientation = .vertical; srcStack.alignment = .leading; srcStack.spacing = 10
+        let ghBtn = sidebarButton("View Skill on GitHub", "arrow.up.right.square", #selector(githubTapped))
+        ghBtn.isEnabled = skill.skillGithubURL != nil
+        let crBtn = sidebarButton("Creator's GitHub", "person.crop.circle", #selector(creatorTapped))
+        crBtn.isEnabled = skill.creatorGithubURL != nil
+        let srcStack = NSStackView(views: [idRow, ghBtn, crBtn])
+        srcStack.orientation = .vertical; srcStack.alignment = .leading; srcStack.spacing = 8
         srcStack.translatesAutoresizingMaskIntoConstraints = false
         addCard(card("Source", srcStack))
         idRow.widthAnchor.constraint(equalTo: srcStack.widthAnchor).isActive = true
-        ghBtn.widthAnchor.constraint(equalTo: srcStack.widthAnchor).isActive = true
+        for b in [ghBtn, crBtn] { b.widthAnchor.constraint(equalTo: srcStack.widthAnchor).isActive = true }
 
         // Slash command card (Copy only)
         let copyBtn = sidebarButton("Copy  \(skill.initiator)", "doc.on.clipboard", #selector(copySlashTapped), prominent: true)
@@ -1598,13 +1681,21 @@ final class SkillDetailView: NSView {
         // Actions
         let favBtn = sidebarButton(isFavorite ? "Favorited" : "Favorite", isFavorite ? "star.fill" : "star", #selector(favoriteTapped))
         favBtn.contentTintColor = isFavorite ? .systemYellow : nil
+        favButtonRef = favBtn
         let folderBtn = sidebarButton("Add to Folder…", "folder.badge.plus", #selector(organizeTapped))
-        let revealBtn = sidebarButton("Reveal SKILL.md", "doc.text.magnifyingglass", #selector(revealTapped))
-        let actStack = NSStackView(views: [favBtn, folderBtn, revealBtn])
+        let actStack = NSStackView(views: [favBtn, folderBtn])
         actStack.orientation = .vertical; actStack.alignment = .leading; actStack.spacing = 8
         actStack.translatesAutoresizingMaskIntoConstraints = false
         addCard(card(nil, actStack))
-        for b in [favBtn, folderBtn, revealBtn] { b.widthAnchor.constraint(equalTo: actStack.widthAnchor).isActive = true }
+        for b in [favBtn, folderBtn] { b.widthAnchor.constraint(equalTo: actStack.widthAnchor).isActive = true }
+    }
+
+    private weak var favButtonRef: NSButton?
+    /// Light favorite-state update (no full reconfigure) for the sidebar button.
+    func setFavorite(_ on: Bool) {
+        favButtonRef?.title = on ? " Favorited" : " Favorite"
+        favButtonRef?.image = NSImage(systemSymbolName: on ? "star.fill" : "star", accessibilityDescription: nil)
+        favButtonRef?.contentTintColor = on ? .systemYellow : nil
     }
 
     private func addCard(_ c: NSView) {
@@ -1616,12 +1707,12 @@ final class SkillDetailView: NSView {
     @objc private func favoriteTapped() { if let s = skill { onToggleFavorite?(s) } }
     @objc private func organizeTapped() { if let s = skill { onOrganize?(s, sidebarStack) } }
     @objc private func copySlashTapped() { if let s = skill { onCopy?(s) } }
-    @objc private func revealTapped() {
-        guard let skill = skill else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: skill.skillMDPath)])
-    }
     @objc private func githubTapped() {
-        guard let url = skill?.githubURL else { return }
+        guard let url = skill?.skillGithubURL else { return }
+        NSWorkspace.shared.open(url)
+    }
+    @objc private func creatorTapped() {
+        guard let url = skill?.creatorGithubURL else { return }
         NSWorkspace.shared.open(url)
     }
 }
