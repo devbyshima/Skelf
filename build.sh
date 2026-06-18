@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Compile Skelf.swift into a runnable Skelf.app bundle (no Xcode project).
+# Compile Sources/Skelf/Skelf.swift into a runnable Skelf.app bundle (no Xcode project).
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP="$DIR/Skelf.app"
+SRC="$DIR/Sources/Skelf/Skelf.swift"
+RES="$DIR/Resources"
 ARCH="$(uname -m)"   # arm64 on Apple Silicon
 
 rm -rf "$APP"
@@ -28,10 +30,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# App icon (Skelf.icns generated from Icons/Skelf-iOS-Default-1024@1x.png).
-[ -f "$DIR/Skelf.icns" ] && cp "$DIR/Skelf.icns" "$APP/Contents/Resources/Skelf.icns"
+# App icon (Resources/Skelf.icns, generated from Resources/AppIcon/Skelf-iOS-Default-1024@1x.png).
+[ -f "$RES/Skelf.icns" ] && cp "$RES/Skelf.icns" "$APP/Contents/Resources/Skelf.icns"
 # Menu-bar icon: the Skelf mark (loaded as a vector template image at runtime).
-[ -f "$DIR/Icons/skelf.svg" ] && cp "$DIR/Icons/skelf.svg" "$APP/Contents/Resources/skelf.svg"
+[ -f "$RES/skelf.svg" ] && cp "$RES/skelf.svg" "$APP/Contents/Resources/skelf.svg"
 
 # SwiftUI uses external macros (@State, @Bindable, …) whose compiler plugin
 # (libSwiftUIMacros.dylib) ships only inside Xcode, NOT the Command Line Tools.
@@ -57,7 +59,7 @@ swiftc -O -swift-version 5 -parse-as-library \
   -target "${ARCH}-apple-macosx26.0" \
   -framework AppKit -framework QuartzCore -framework CoreServices \
   "${PLUGIN_ARGS[@]}" \
-  "$DIR/Skelf.swift" \
+  "$SRC" \
   -o "$APP/Contents/MacOS/Skelf"
 
 # Ad-hoc sign so the locally-built app launches cleanly.

@@ -108,15 +108,25 @@ open Skelf.app --args --popover                    # launch with the menu-bar po
 SKILLSHELF_DEBUG=1 ./Skelf.app/Contents/MacOS/Skelf 2>log   # log reloads to stderr
 ```
 
-## Files
+## Project layout
 
-- `Skelf.swift` — the whole app (model + disk store + FSEvents watcher + SwiftUI
-  navigation shell + AppKit grid + detail + menu-bar popover + glass toast). Single file.
+```
+Skelf/
+├── Sources/Skelf/Skelf.swift   # the whole app, one file
+├── Resources/
+│   ├── skelf.svg               # menu-bar mark (vector template)
+│   ├── Skelf.icns              # app/dock icon
+│   └── AppIcon/                # full branding set (iOS/watchOS · Default/Dark/Clear/Tinted)
+├── build.sh                    # swiftc → Skelf.app (no Xcode project)
+├── LICENSE                     # MIT
+└── README.md
+```
+
+- `Sources/Skelf/Skelf.swift` — model + disk store + FSEvents watcher + SwiftUI
+  navigation shell + AppKit grid + detail + menu-bar popover + glass toast, in one file.
 - `build.sh` — compiles the `.app` bundle (finds Xcode's SwiftUI macro plugin), embeds
-  the icon, and ad-hoc signs it.
-- `Skelf.icns` — app/dock icon (generated from `Icons/Skelf-iOS-Default-1024@1x.png`).
-- `Icons/` — the full branding set: app-icon variants (iOS/watchOS · Default / Dark /
-  Clear / Tinted, all sizes) and the source `skelf.svg` mark used for the menu-bar icon.
+  `Resources/Skelf.icns` + `Resources/skelf.svg`, and ad-hoc signs it. `Skelf.app/` is a
+  build artifact (git-ignored).
 
 ## Notes / possible next steps
 
