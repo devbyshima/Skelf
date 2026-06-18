@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Compile Sources/Skelf/Skelf.swift into a runnable Skelf.app bundle (no Xcode project).
+# Compile the Sources/Skelf/*.swift sources into a runnable Skelf.app bundle (no Xcode
+# project). For development you can also `swift build` or open Package.swift in Xcode.
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP="$DIR/Skelf.app"
-SRC="$DIR/Sources/Skelf/Skelf.swift"
+SRCDIR="$DIR/Sources/Skelf"
 RES="$DIR/Resources"
 ARCH="$(uname -m)"   # arm64 on Apple Silicon
 
@@ -30,13 +31,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# App icon (Resources/Skelf.icns, generated from Resources/AppIcon/Skelf-iOS-Default-1024@1x.png).
+# App-packaging asset: the icon (Resources/Skelf.icns, from Resources/AppIcon/…1024@1x.png).
 [ -f "$RES/Skelf.icns" ] && cp "$RES/Skelf.icns" "$APP/Contents/Resources/Skelf.icns"
+# Runtime resources live with the target (Sources/Skelf/Resources/) so SwiftPM/Xcode bundle
+# them too (Bundle.module); build.sh copies them into Skelf.app (Bundle.main). See Bundle+Skelf.swift.
+RUNRES="$SRCDIR/Resources"
 # Menu-bar icon: the Skelf mark (loaded as a vector template image at runtime).
-[ -f "$RES/skelf.svg" ] && cp "$RES/skelf.svg" "$APP/Contents/Resources/skelf.svg"
-# Per-skill Creative-Commons art map (skill id → CC image URL); optional — the app
+[ -f "$RUNRES/skelf.svg" ] && cp "$RUNRES/skelf.svg" "$APP/Contents/Resources/skelf.svg"
+# Per-skill public-domain painting map (skill id → artwork URL); optional — the app
 # generates a themed fallback for any skill not listed.
-[ -f "$RES/art-map.json" ] && cp "$RES/art-map.json" "$APP/Contents/Resources/art-map.json"
+[ -f "$RUNRES/art-map.json" ] && cp "$RUNRES/art-map.json" "$APP/Contents/Resources/art-map.json"
 
 # SwiftUI uses external macros (@State, @Bindable, …) whose compiler plugin
 # (libSwiftUIMacros.dylib) ships only inside Xcode, NOT the Command Line Tools.
@@ -62,7 +66,7 @@ swiftc -O -swift-version 5 -parse-as-library \
   -target "${ARCH}-apple-macosx26.0" \
   -framework AppKit -framework QuartzCore -framework CoreServices \
   "${PLUGIN_ARGS[@]}" \
-  "$SRC" \
+  "$SRCDIR"/*.swift \
   -o "$APP/Contents/MacOS/Skelf"
 
 # Ad-hoc sign so the locally-built app launches cleanly.

@@ -1,0 +1,35 @@
+# SwiftLint configuration for Skelf.
+# Lenient by design: this is a UI-heavy AppKit/SwiftUI app, so the noisier length and
+# force-unwrap rules are relaxed rather than fought. See https://realm.github.io/SwiftLint/
+
+included:
+  - Sources
+
+excluded:
+  - .build
+  - Sources/Skelf/Resources
+
+disabled_rules:
+  - line_length              # UI layout code runs long; not worth wrapping
+  - function_body_length
+  - type_body_length
+  - file_length
+  - cyclomatic_complexity
+  - force_cast
+  - force_unwrapping         # deliberate in known-safe AppKit paths
+  - todo
+  - large_tuple
+  - function_parameter_count
+  - for_where
+
+opt_in_rules:
+  - empty_count
+  - closure_spacing
+  - unneeded_parentheses_in_closure_argument
+
+identifier_name:
+  min_length: 1              # short names like q, s, x, y, dx are intentional
+  max_length: 60
+
+nesting:
+  type_level: 3
