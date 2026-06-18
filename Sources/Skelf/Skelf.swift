@@ -452,15 +452,16 @@ final class FolderStore {
     }
 
     /// Group skills under their creator — but only when the grouping is meaningful:
-    /// the skill must have a real `owner/repo` source AND that owner must have ≥2
-    /// installed skills. Singletons, `local`, and sourceless skills stay loose at
-    /// root (a lone skill doesn't earn a folder). Only skills at root are touched —
-    /// anything the user filed themselves is left alone. Auto-folders that stop being
-    /// valid are dissolved (their skills returned to root). Runs on every reload.
-    func autoCategorize(_ installed: [Skill]) {
+    /// the skill's `owner/repo` source must be VERIFIED to exist on GitHub (so we can
+    /// actually attribute it) AND that owner must have ≥2 installed skills. Skills whose
+    /// GitHub page can't be confirmed, `local`, sourceless, and singletons stay loose at
+    /// root. Only skills at root are touched — anything the user filed is left alone.
+    /// Auto-folders that stop being valid are dissolved. Runs on every reload (+ again
+    /// as background GitHub verification resolves).
+    func autoCategorize(_ installed: [Skill], isVerified: (String) -> Bool) {
         var changed = false
         func creator(of s: Skill) -> String? {
-            guard s.source.contains("/") else { return nil }
+            guard s.source.contains("/"), isVerified(s.source) else { return nil }
             return s.source.split(separator: "/").first.map(String.init)
         }
         let creatorOf = Dictionary(uniqueKeysWithValues: installed.compactMap { s in creator(of: s).map { (s.id, $0) } })
@@ -616,6 +617,56 @@ final class GlassCardView: NSGlassEffectView {
     @available(macOS 27.0, *)
     override var cornerConfiguration: NSViewCornerConfiguration? {
         .uniformCorners(radius: .containerConcentric(10))
+    }
+}
+
+// Verifies a skill's source repo actually exists on GitHub (HEAD https://github.com/
+// <owner>/<repo>). Only verified skills may be auto-filed under a creator; if the page
+// can't be confirmed, we can't say who the skill belongs to, so it stays unfiled.
+// Confirmed repos persist (UserDefaults); 404s/errors stay in memory so a later-created
+// repo or a flaky network can still resolve on a future launch.
+final class GitHubVerifier {
+    static let shared = GitHubVerifier()
+    private let key = "verifiedRepoSourcesV1"
+    private var verified: Set<String>
+    private var notFound: Set<String> = []
+    private var inflight: Set<String> = []
+
+    init() { verified = Set(UserDefaults.standard.stringArray(forKey: key) ?? []) }
+
+    /// true = repo exists, false = confirmed missing (404), nil = not checked yet.
+    func status(_ source: String) -> Bool? {
+        if verified.contains(source) { return true }
+        if notFound.contains(source) { return false }
+        return nil
+    }
+
+    /// HEAD-check the repo; calls back on the main queue once resolved (or immediately
+    /// if already known / not a real owner/repo). Must be called on the main queue.
+    func verify(_ source: String, completion: @escaping () -> Void) {
+        if status(source) != nil { completion(); return }
+        guard source.contains("/"), let url = URL(string: "https://github.com/\(source)") else {
+            notFound.insert(source); completion(); return
+        }
+        if inflight.contains(source) { return }
+        inflight.insert(source)
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.httpMethod = "HEAD"
+        URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.inflight.remove(source)
+                if let code = (resp as? HTTPURLResponse)?.statusCode {
+                    if code == 200 {
+                        self.verified.insert(source)
+                        UserDefaults.standard.set(Array(self.verified), forKey: self.key)
+                    } else if code == 404 || code == 451 {
+                        self.notFound.insert(source)
+                    }   // rate-limit / 5xx / transient: leave unknown, retry next launch
+                }
+                completion()
+            }
+        }.resume()
     }
 }
 
@@ -3030,7 +3081,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         store.reload()
         folders.undoManager = undoManager
         folders.syncInstalled(Set(store.skills.map { $0.id }))
-        folders.autoCategorize(store.skills)
+        verifyAndCategorize()
         setupMainMenu()
         dlog("launched -> \(store.skills.count) skills")
         // A folder change reloads the grid + popover; a favorite change only updates
@@ -3115,10 +3166,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     private func reloadFromDisk(auto: Bool) {
         store.reload()
         folders.syncInstalled(Set(store.skills.map { $0.id }))
-        folders.autoCategorize(store.skills)
+        verifyAndCategorize()
         popoverController?.reload()
         model?.bumpReload()
         dlog("reload(auto: \(auto)) -> \(store.skills.count) skills")
+    }
+
+    private var recatWork: DispatchWorkItem?
+    /// Categorize with what GitHub verification already knows, then HEAD-check any
+    /// unverified `owner/repo` sources in the background and re-categorize as they
+    /// resolve (a skill slides from the home page into its creator's folder once
+    /// confirmed). Unverifiable sources stay unfiled at root.
+    private func verifyAndCategorize() {
+        let verified: (String) -> Bool = { GitHubVerifier.shared.status($0) == true }
+        folders.autoCategorize(store.skills, isVerified: verified)
+        let sources = Set(store.skills.map { $0.source }.filter { $0.contains("/") })
+        for src in sources where GitHubVerifier.shared.status(src) == nil {
+            GitHubVerifier.shared.verify(src) { [weak self] in self?.scheduleRecategorize() }
+        }
+    }
+    private func scheduleRecategorize() {
+        recatWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.folders.autoCategorize(self.store.skills) { GitHubVerifier.shared.status($0) == true }
+            self.model?.bumpReload()
+            self.popoverController?.reload()
+        }
+        recatWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)
     }
 
     private func dlog(_ s: String) {
