@@ -9,10 +9,15 @@
 //   ~/Dev/skills-lock.json               (source repo, category from skillPath)
 // Override the base dir with the SKILLS_DEV_DIR env var.
 //
-// Pure AppKit (no SwiftUI) so it compiles with the Command Line Tools toolchain.
-// Build:  ./build.sh        Run:  open SkillShelf.app
+// The window navigation + toolbars are SwiftUI (NavigationStack + Liquid Glass
+// .toolbar, bridged into the AppKit window via NSHostingController), hosting the
+// AppKit grid + detail. SwiftUI's external macros (@State/@Bindable) need Xcode's
+// libSwiftUIMacros plugin, which build.sh locates and passes via -plugin-path.
+// Build:  ./build.sh        Run:  open Skelf.app
 
 import AppKit
+import SwiftUI
+import Observation
 import QuartzCore
 import CoreServices
 
@@ -413,45 +418,6 @@ enum GridEntry {
 
 // Drag-and-drop payload type for grid items ("skill:<id>" / "folder:<id>").
 let skelfEntryType = NSPasteboard.PasteboardType("dev.fulltime.skelf.entry")
-
-// A breadcrumb that's also a drop target — drag a skill/folder onto it to move it up.
-final class CrumbButton: NSButton {
-    var folderId = ""
-    var onDropEntry: ((String, String) -> Bool)?
-
-    func enableDrops() { registerForDraggedTypes([skelfEntryType]) }
-
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard sender.draggingPasteboard.availableType(from: [skelfEntryType]) != nil else { return [] }
-        dropHighlight(true)
-        return .move
-    }
-    override func draggingExited(_ sender: NSDraggingInfo?) { dropHighlight(false) }
-    override func draggingEnded(_ sender: NSDraggingInfo) { dropHighlight(false) }
-    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        dropHighlight(false)
-        guard let s = sender.draggingPasteboard.pasteboardItems?.first?.string(forType: skelfEntryType) else { return false }
-        return onDropEntry?(s, folderId) ?? false
-    }
-    private func dropHighlight(_ on: Bool) {
-        wantsLayer = true
-        layer?.cornerRadius = 5
-        layer?.backgroundColor = on ? NSColor.controlAccentColor.withAlphaComponent(0.28).cgColor : NSColor.clear.cgColor
-    }
-}
-
-// Payload carried by context-menu items (move/copy targets).
-final class CtxPayload {
-    let skillId: String?
-    let folderId: String?
-    let source: String?
-    let target: String
-    let copy: Bool
-    init(skillId: String? = nil, folderId: String? = nil, source: String? = nil, target: String, copy: Bool = false) {
-        self.skillId = skillId; self.folderId = folderId; self.source = source; self.target = target; self.copy = copy
-    }
-}
 
 // MARK: - Shared helpers
 
@@ -1225,133 +1191,95 @@ final class SkillDetailView: NSView {
     }
 }
 
-// MARK: - Window content (grid + detail navigation)
+// MARK: - Window content (AppKit grid hosted inside a SwiftUI Liquid Glass nav)
 
-final class SkillsViewController: NSViewController, NSCollectionViewDataSource, NSCollectionViewDelegate,
-                                  NSSearchFieldDelegate {
-    private let store: SkillStore
-    private let favorites: Favorites
-    private let folders: FolderStore
-    private let onCopy: (Skill) -> Void
+// A closure-backed menu item — build folder pickers without @objc plumbing.
+final class ClosureMenuItem: NSMenuItem {
+    private let handler: () -> Void
+    init(title: String, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(fire), keyEquivalent: "")
+        target = self
+    }
+    required init(coder: NSCoder) { fatalError() }
+    @objc private func fire() { handler() }
+}
+
+// A menu mirroring the folder tree; `pick` fires with the chosen folder id.
+func folderPickerMenu(_ folders: FolderStore, exclude: String? = nil, pick: @escaping (String) -> Void) -> NSMenu {
+    let menu = NSMenu()
+    func add(_ id: String, _ depth: Int) {
+        guard let node = folders.node(id), id != exclude else { return }
+        let title = String(repeating: "    ", count: depth) + (id == folders.rootId ? "All Skills" : node.name)
+        menu.addItem(ClosureMenuItem(title: title) { pick(id) })
+        for c in node.folders { add(c, depth + 1) }
+    }
+    add(folders.rootId, 0)
+    return menu
+}
+
+// Modal text prompt (new / rename folder).
+func promptForText(title: String, default def: String, _ done: @escaping (String) -> Void) {
+    let alert = NSAlert()
+    alert.messageText = title
+    alert.addButton(withTitle: "OK")
+    alert.addButton(withTitle: "Cancel")
+    let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+    tf.stringValue = def
+    alert.accessoryView = tf
+    alert.window.initialFirstResponder = tf
+    if alert.runModal() == .alertFirstButtonReturn {
+        let v = tf.stringValue.trimmingCharacters(in: .whitespaces)
+        if !v.isEmpty { done(v) }
+    }
+}
+
+// A collection view that tells a click apart from a drag: it only "activates" an
+// item on a clean mouse-up with no drag, so press-and-drag is free to reorder/move.
+final class GridCollectionView: NSCollectionView {
+    var onActivate: ((IndexPath) -> Void)?
+    var dragDidStart = false
+    override func mouseDown(with event: NSEvent) {
+        let pt = convert(event.locationInWindow, from: nil)
+        let ip = indexPathForItem(at: pt)
+        dragDidStart = false
+        super.mouseDown(with: event)   // modal: returns once the click/drag has finished
+        if let ip = ip, !dragDidStart, event.clickCount == 1 { onActivate?(ip) }
+    }
+}
+
+// The grid for ONE folder. Navigation + toolbar live in SwiftUI; this renders the
+// folder's entries, handles drag/drop/reorder + per-tile menus, and reports clicks.
+final class GridViewController: NSViewController, NSCollectionViewDataSource, NSCollectionViewDelegate {
+    let model: SkelfModel
+    var folderId: String
+    var onOpenSkill: ((String) -> Void)?
+    var onOpenFolder: ((String) -> Void)?
 
     private var entries: [GridEntry] = []
-    private var currentFolderId: String
-    private var filterMode = 0
     private var query = ""
-    private var detailSkill: Skill?
+    private var filterMode = 0
+    private var lastToken = -1
 
-    // internal cut/copy clipboard (for paste-into-current-folder)
-    private struct Clip { let id: String; let isFolder: Bool; let cut: Bool; let source: String; let name: String }
-    private var clip: Clip?
-
-    private let searchField = NSSearchField()
-    private let filterSeg = NSSegmentedControl(labels: ["All", "Enabled", "Off"],
-                                               trackingMode: .selectOne, target: nil, action: nil)
-    private let collectionView = NSCollectionView()
+    private let collectionView = GridCollectionView()
     private let gridScroll = NSScrollView()
-    private let bar = NSView()
-    private let crumbBar = NSView()
-    private let crumbStack = NSStackView()
-    private let pasteButton = NSButton()
-    private let newFolderButton = NSButton()
-    private let topDivider = NSBox()
-    private let crumbDivider = NSBox()
-    private let detailView = SkillDetailView(frame: .zero)
-
     private let skillItemID = NSUserInterfaceItemIdentifier("SkillGridItem")
     private let folderItemID = NSUserInterfaceItemIdentifier("FolderGridItem")
 
-    init(store: SkillStore, favorites: Favorites, folders: FolderStore, onCopy: @escaping (Skill) -> Void) {
-        self.store = store
-        self.favorites = favorites
-        self.folders = folders
-        self.currentFolderId = folders.rootId
-        self.onCopy = onCopy
+    init(model: SkelfModel, folderId: String) {
+        self.model = model
+        self.folderId = folderId
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    override func loadView() { view = NSView(frame: NSRect(x: 0, y: 0, width: 760, height: 580)) }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        buildUI()          // initial state is the grid (detailView starts hidden); no transition animation here
-        applyFilter()
-    }
-
-    func openDetail(id: String) {
-        if let s = store.skills.first(where: { $0.id == id }) { showDetail(s) }
-    }
-
-    func enterFolder(id: String) {
-        if folders.node(id) != nil { navigate(to: id) }
-    }
-
-    func refreshFromStore(auto: Bool = false) {
-        if folders.node(currentFolderId) == nil { currentFolderId = folders.rootId }  // current folder was deleted
-        applyFilter()
-        if !detailView.isHidden, let id = detailSkill?.id,
-           let fresh = store.skills.first(where: { $0.id == id }) {
-            detailSkill = fresh
-            detailView.configure(fresh, isFavorite: favorites.isFavorite(id))
-        }
-    }
-
-    private func buildUI() {
-        bar.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(bar)
-
-        searchField.translatesAutoresizingMaskIntoConstraints = false
-        searchField.placeholderString = "Search this folder…"
-        searchField.delegate = self
-        bar.addSubview(searchField)
-
-        filterSeg.translatesAutoresizingMaskIntoConstraints = false
-        filterSeg.selectedSegment = 0
-        filterSeg.target = self
-        filterSeg.action = #selector(filterChanged)
-        bar.addSubview(filterSeg)
-
-        topDivider.boxType = .separator
-        topDivider.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(topDivider)
-
-        // breadcrumb bar
-        crumbBar.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(crumbBar)
-        crumbStack.orientation = .horizontal
-        crumbStack.spacing = 4
-        crumbStack.alignment = .centerY
-        crumbStack.translatesAutoresizingMaskIntoConstraints = false
-        crumbBar.addSubview(crumbStack)
-        pasteButton.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "Paste")
-        pasteButton.imagePosition = .imageLeading
-        pasteButton.bezelStyle = .rounded
-        pasteButton.controlSize = .small
-        pasteButton.target = self
-        pasteButton.action = #selector(pasteTapped)
-        pasteButton.isHidden = true
-        pasteButton.translatesAutoresizingMaskIntoConstraints = false
-        crumbBar.addSubview(pasteButton)
-        newFolderButton.title = "New Folder"
-        newFolderButton.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: "New Folder")
-        newFolderButton.imagePosition = .imageLeading
-        newFolderButton.bezelStyle = .rounded
-        newFolderButton.controlSize = .small
-        newFolderButton.target = self
-        newFolderButton.action = #selector(newFolderTapped)
-        newFolderButton.translatesAutoresizingMaskIntoConstraints = false
-        crumbBar.addSubview(newFolderButton)
-
-        crumbDivider.boxType = .separator
-        crumbDivider.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(crumbDivider)
-
+    override func loadView() {
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 760, height: 520))
         gridScroll.translatesAutoresizingMaskIntoConstraints = false
         gridScroll.hasVerticalScroller = true
         gridScroll.borderType = .noBorder
         gridScroll.drawsBackground = false
-        view.addSubview(gridScroll)
+        root.addSubview(gridScroll)
 
         let layout = NSCollectionViewFlowLayout()
         layout.itemSize = NSSize(width: 150, height: 132)
@@ -1368,187 +1296,36 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
         collectionView.register(FolderGridItem.self, forItemWithIdentifier: folderItemID)
         collectionView.registerForDraggedTypes([skelfEntryType])
         collectionView.setDraggingSourceOperationMask(.move, forLocal: true)
+        collectionView.onActivate = { [weak self] ip in self?.activate(ip) }
         gridScroll.documentView = collectionView
 
-        detailView.translatesAutoresizingMaskIntoConstraints = false
-        detailView.onBack = { [weak self] in self?.showGrid() }
-        detailView.onCopy = { [weak self] skill in self?.didCopy(skill) }
-        detailView.onToggleFavorite = { [weak self] skill in self?.favorites.toggle(skill.id) }
-        detailView.onOrganize = { [weak self] skill, anchor in self?.showCopyToFolderMenu(skill, anchor: anchor) }
-        detailView.isHidden = true
-        view.addSubview(detailView)
-
         NSLayoutConstraint.activate([
-            bar.topAnchor.constraint(equalTo: view.topAnchor),
-            bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            bar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            bar.heightAnchor.constraint(equalToConstant: 46),
-
-            filterSeg.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -12),
-            filterSeg.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            filterSeg.widthAnchor.constraint(equalToConstant: 180),
-            searchField.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 12),
-            searchField.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            searchField.trailingAnchor.constraint(equalTo: filterSeg.leadingAnchor, constant: -10),
-
-            topDivider.topAnchor.constraint(equalTo: bar.bottomAnchor),
-            topDivider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            topDivider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-
-            crumbBar.topAnchor.constraint(equalTo: topDivider.bottomAnchor),
-            crumbBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            crumbBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            crumbBar.heightAnchor.constraint(equalToConstant: 36),
-            crumbStack.leadingAnchor.constraint(equalTo: crumbBar.leadingAnchor, constant: 12),
-            crumbStack.centerYAnchor.constraint(equalTo: crumbBar.centerYAnchor),
-            crumbStack.trailingAnchor.constraint(lessThanOrEqualTo: pasteButton.leadingAnchor, constant: -8),
-            pasteButton.trailingAnchor.constraint(equalTo: newFolderButton.leadingAnchor, constant: -8),
-            pasteButton.centerYAnchor.constraint(equalTo: crumbBar.centerYAnchor),
-            newFolderButton.trailingAnchor.constraint(equalTo: crumbBar.trailingAnchor, constant: -12),
-            newFolderButton.centerYAnchor.constraint(equalTo: crumbBar.centerYAnchor),
-
-            crumbDivider.topAnchor.constraint(equalTo: crumbBar.bottomAnchor),
-            crumbDivider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            crumbDivider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-
-            gridScroll.topAnchor.constraint(equalTo: crumbDivider.bottomAnchor),
-            gridScroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            gridScroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            gridScroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-
-            detailView.topAnchor.constraint(equalTo: view.topAnchor),
-            detailView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            detailView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            detailView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            gridScroll.topAnchor.constraint(equalTo: root.topAnchor),
+            gridScroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            gridScroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            gridScroll.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
-        rebuildCrumbs()
+        view = root
     }
 
-    // --- breadcrumb ---
+    override func viewDidLoad() { super.viewDidLoad(); reload() }
 
-    private func rebuildCrumbs() {
-        crumbStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let nodes = folders.path(to: currentFolderId)
-        for (i, node) in nodes.enumerated() {
-            if i > 0 {
-                let sep = NSTextField(labelWithString: "›")
-                sep.textColor = .tertiaryLabelColor
-                sep.font = .systemFont(ofSize: 13)
-                crumbStack.addArrangedSubview(sep)
-            }
-            let isCurrent = (i == nodes.count - 1)
-            if isCurrent {
-                let lbl = NSTextField(labelWithString: node.name)
-                lbl.font = .systemFont(ofSize: 13, weight: .semibold)
-                lbl.toolTip = node.id == folders.rootId ? nil : "Double-click to rename"
-                if node.id != folders.rootId {
-                    let g = NSClickGestureRecognizer(target: self, action: #selector(renameCurrent))
-                    g.numberOfClicksRequired = 2
-                    lbl.addGestureRecognizer(g)
-                }
-                crumbStack.addArrangedSubview(lbl)
-            } else {
-                let btn = CrumbButton(title: node.name, target: self, action: #selector(crumbTapped(_:)))
-                btn.isBordered = false
-                btn.contentTintColor = .controlAccentColor
-                btn.font = .systemFont(ofSize: 13)
-                btn.tag = i
-                btn.folderId = node.id
-                btn.toolTip = "Drop a skill or folder here to move it to “\(node.name)”"
-                btn.enableDrops()
-                btn.onDropEntry = { [weak self] payload, target in self?.handleCrumbDrop(payload, into: target) ?? false }
-                crumbStack.addArrangedSubview(btn)
-            }
-        }
+    /// Called by the SwiftUI host whenever search / filter / data changes.
+    func apply(query: String, filter: Int, token: Int) {
+        guard query != self.query || filter != filterMode || token != lastToken else { return }
+        self.query = query; self.filterMode = filter; lastToken = token
+        if isViewLoaded { reload() }
     }
 
-    private func handleCrumbDrop(_ payload: String, into folderId: String) -> Bool {
-        let comps = payload.split(separator: ":", maxSplits: 1).map(String.init)
-        guard comps.count == 2 else { return false }
-        if comps[0] == "folder" {
-            guard comps[1] != folderId, !folders.isDescendant(folderId, of: comps[1]) else { return false }
-            folders.moveFolder(comps[1], to: folderId)
-        } else {
-            folders.moveSkill(comps[1], from: currentFolderId, to: folderId)
-        }
-        Sound.play(.move)
-        return true
-    }
+    func reload() { buildEntries(); collectionView.reloadData() }
 
-    @objc private func crumbTapped(_ sender: NSButton) {
-        let nodes = folders.path(to: currentFolderId)
-        if sender.tag >= 0, sender.tag < nodes.count { navigate(to: nodes[sender.tag].id) }
-    }
-
-    @objc private func renameCurrent() {
-        guard currentFolderId != folders.rootId, let node = folders.node(currentFolderId) else { return }
-        promptText("Rename folder", node.name) { [weak self] name in
-            guard let self = self else { return }
-            self.folders.rename(self.currentFolderId, to: name)
-        }
-    }
-
-    private func navigate(to id: String) {
-        currentFolderId = id
-        rebuildCrumbs()
-        applyFilter()
-        showGrid()
-    }
-
-    // --- navigation between grid / detail ---
-
-    private var showingDetail = false
-
-    private func showGrid() {
-        detailSkill = nil
-        showingDetail = false
-        bar.isHidden = false; topDivider.isHidden = false; gridScroll.isHidden = false
-        crumbBar.isHidden = false; crumbDivider.isHidden = false
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.16; ctx.allowsImplicitAnimation = true
-            self.detailView.animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            guard let self = self, !self.showingDetail else { return }
-            self.detailView.isHidden = true
-            self.collectionView.deselectAll(nil)
-        })
-    }
-
-    private func showDetail(_ skill: Skill) {
-        detailSkill = skill
-        showingDetail = true
-        detailView.configure(skill, isFavorite: favorites.isFavorite(skill.id))
-        detailView.alphaValue = 0
-        detailView.isHidden = false
-        detailView.wantsLayer = true
-        // morph in: spring-scale up from the tile while fading (zoom-through feel)
-        if let l = detailView.layer, l.bounds.width > 1 {
-            let spring = CASpringAnimation(keyPath: "transform")
-            spring.fromValue = centerScale(l, 0.96)
-            spring.toValue = CATransform3DIdentity
-            spring.damping = 16; spring.stiffness = 240; spring.mass = 1
-            spring.duration = spring.settlingDuration
-            l.add(spring, forKey: "morph")
-        }
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.2; ctx.allowsImplicitAnimation = true
-            self.detailView.animator().alphaValue = 1
-        }, completionHandler: { [weak self] in
-            guard let self = self, self.showingDetail else { return }
-            self.bar.isHidden = true; self.topDivider.isHidden = true; self.gridScroll.isHidden = true
-            self.crumbBar.isHidden = true; self.crumbDivider.isHidden = true
-        })
-    }
-
-    // --- entries (folders + skills of the current folder) ---
-
-    private func applyFilter() {
+    private func buildEntries() {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         var e: [GridEntry] = []
-        for f in folders.childFolders(of: currentFolderId) where q.isEmpty || f.name.lowercased().contains(q) {
+        for f in model.folders.childFolders(of: folderId) where q.isEmpty || f.name.lowercased().contains(q) {
             e.append(.folder(f))
         }
-        let here = folders.skillIds(in: currentFolderId).compactMap { id in store.skills.first { $0.id == id } }
+        let here = model.folders.skillIds(in: folderId).compactMap { id in model.store.skills.first { $0.id == id } }
         let matched = here.filter { s in
             let passFilter = filterMode == 0 || (filterMode == 1 && s.enabled) || (filterMode == 2 && !s.enabled)
             let passQuery = q.isEmpty
@@ -1558,18 +1335,20 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
                 || s.source.lowercased().contains(q)
             return passFilter && passQuery
         }
-        for s in favorites.ordered(matched) { e.append(.skill(s)) }
+        for s in model.favorites.ordered(matched) { e.append(.skill(s)) }
         entries = e
-        collectionView.reloadData()
     }
 
-    private func didCopy(_ skill: Skill) { onCopy(skill) }
+    private func activate(_ ip: IndexPath) {
+        guard ip.item < entries.count else { return }
+        switch entries[ip.item] {
+        case .folder(let n): (collectionView.item(at: ip) as? FolderGridItem)?.pressPop(); onOpenFolder?(n.id)
+        case .skill(let s): (collectionView.item(at: ip) as? SkillGridItem)?.pressPop(); onOpenSkill?(s.id)
+        }
+        collectionView.deselectAll(nil)
+    }
 
-    @objc private func filterChanged() { filterMode = filterSeg.selectedSegment; applyFilter() }
-    func controlTextDidChange(_ obj: Notification) { query = searchField.stringValue; applyFilter() }
-
-    // --- collection data (folders + skills) ---
-
+    // --- collection data ---
     func collectionView(_ cv: NSCollectionView, numberOfItemsInSection section: Int) -> Int { entries.count }
 
     func collectionView(_ cv: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
@@ -1586,18 +1365,18 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
                     self.popMenu(self.folderMenu(node), at: anchor)
                 }
             }
-            item.view.menu = folderMenu(node)   // right-click parity
+            item.view.menu = folderMenu(node)
             return item
         case .skill(let skill):
             let item = cv.makeItem(withIdentifier: skillItemID, for: indexPath)
             if let grid = item as? SkillGridItem {
-                grid.configure(skill, isFavorite: favorites.isFavorite(skill.id))
+                grid.configure(skill, isFavorite: model.favorites.isFavorite(skill.id))
                 grid.onMenu = { [weak self] anchor in
                     guard let self = self else { return }
                     self.popMenu(self.skillMenu(skill), at: anchor)
                 }
             }
-            item.view.menu = skillMenu(skill)   // right-click parity
+            item.view.menu = skillMenu(skill)
             return item
         }
     }
@@ -1606,23 +1385,14 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 2), in: anchor)
     }
 
-    func collectionView(_ cv: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
-        if let ip = indexPaths.first, ip.item < entries.count {
-            (cv.item(at: ip) as? SkillGridItem)?.pressPop()      // squash & stretch on press
-            (cv.item(at: ip) as? FolderGridItem)?.pressPop()
-            switch entries[ip.item] {
-            case .folder(let node): navigate(to: node.id)
-            case .skill(let skill): showDetail(skill)
-            }
-        }
-        cv.deselectItems(at: indexPaths)
+    // --- drag & drop / reorder ---
+    func collectionView(_ cv: NSCollectionView, canDragItemsAt indexPaths: Set<IndexPath>, with event: NSEvent) -> Bool {
+        return query.trimmingCharacters(in: .whitespaces).isEmpty && filterMode == 0
     }
 
-    // --- drag & drop / reorder ---
-
-    func collectionView(_ cv: NSCollectionView, canDragItemsAt indexPaths: Set<IndexPath>, with event: NSEvent) -> Bool {
-        // Dragging reorders/moves stored order — only meaningful with no search/filter.
-        return query.trimmingCharacters(in: .whitespaces).isEmpty && filterMode == 0
+    func collectionView(_ cv: NSCollectionView, draggingSession session: NSDraggingSession,
+                        willBeginAt screenPoint: NSPoint, forItemsAt indexPaths: Set<IndexPath>) {
+        (cv as? GridCollectionView)?.dragDidStart = true
     }
 
     func collectionView(_ cv: NSCollectionView, pasteboardWriterForItemAt indexPath: IndexPath) -> NSPasteboardWriting? {
@@ -1640,7 +1410,6 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
                         proposedIndexPath proposedDropIndexPath: AutoreleasingUnsafeMutablePointer<NSIndexPath>,
                         dropOperation proposedDropOperation: UnsafeMutablePointer<NSCollectionView.DropOperation>) -> NSDragOperation {
         let idx = proposedDropIndexPath.pointee as IndexPath
-        // Dropping ON a folder tile = move into that folder; ON a skill = reorder before it.
         if proposedDropOperation.pointee == .on {
             if idx.item < entries.count, case .folder = entries[idx.item] {
                 return .move
@@ -1660,15 +1429,14 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
         let draggedId = comps[1]
 
         if dropOperation == .on, indexPath.item < entries.count, case .folder(let target) = entries[indexPath.item] {
-            if isFolder { folders.moveFolder(draggedId, to: target.id) }
-            else { folders.moveSkill(draggedId, from: currentFolderId, to: target.id) }
+            if isFolder { model.folders.moveFolder(draggedId, to: target.id) }
+            else { model.folders.moveSkill(draggedId, from: folderId, to: target.id) }
             Sound.play(.move)
             return true
         }
-        // reorder within the current folder, inserting before the next same-kind item
         let anchor = anchorId(forKind: isFolder, atEntryIndex: indexPath.item)
-        if isFolder { folders.reorderFolder(draggedId, in: currentFolderId, before: anchor) }
-        else { folders.reorderSkill(draggedId, in: currentFolderId, before: anchor) }
+        if isFolder { model.folders.reorderFolder(draggedId, in: folderId, before: anchor) }
+        else { model.folders.reorderSkill(draggedId, in: folderId, before: anchor) }
         Sound.play(.move)
         return true
     }
@@ -1682,122 +1450,70 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
             }
             i += 1
         }
-        return nil   // append to the end of its array
+        return nil
     }
 
-    // --- folder operations ---
-
-    @objc private func newFolderTapped() {
-        promptText("New folder name", "New Folder") { [weak self] name in
-            guard let self = self else { return }
-            self.folders.createFolder(name: name, in: self.currentFolderId)
-        }
-    }
-
-    private func promptText(_ title: String, _ def: String, _ done: @escaping (String) -> Void) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-        let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        tf.stringValue = def
-        alert.accessoryView = tf
-        alert.window.initialFirstResponder = tf
-        if alert.runModal() == .alertFirstButtonReturn {
-            let v = tf.stringValue.trimmingCharacters(in: .whitespaces)
-            if !v.isEmpty { done(v) }
-        }
-    }
-
-    // --- context menus ---
-
-    private func mi(_ title: String, _ sel: Selector, _ rep: Any?) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: sel, keyEquivalent: "")
-        item.target = self; item.representedObject = rep
-        return item
+    // --- per-tile context menus ---
+    private func simpleItem(_ title: String, _ handler: @escaping () -> Void) -> NSMenuItem {
+        ClosureMenuItem(title: title, handler: handler)
     }
 
     private func skillMenu(_ skill: Skill) -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(mi("Open", #selector(ctxOpenSkill(_:)), skill.id))
-        menu.addItem(mi("Copy Slash Command", #selector(ctxCopySkill(_:)), skill.id))
+        menu.addItem(simpleItem("Open") { [weak self] in self?.onOpenSkill?(skill.id) })
+        menu.addItem(simpleItem("Copy Slash Command") { [weak self] in self?.model.copySkill(skill) })
         menu.addItem(.separator())
-        let fav = favorites.isFavorite(skill.id)
-        menu.addItem(mi(fav ? "Unfavorite" : "Favorite", #selector(ctxToggleFavorite(_:)), skill.id))
+        let fav = model.favorites.isFavorite(skill.id)
+        menu.addItem(simpleItem(fav ? "Unfavorite" : "Favorite") { [weak self] in self?.model.favorites.toggle(skill.id) })
         menu.addItem(.separator())
-        let src = currentFolderId
         let moveItem = NSMenuItem(title: "Move to Folder", action: nil, keyEquivalent: "")
-        moveItem.submenu = folderTreeMenu { CtxPayload(skillId: skill.id, source: src, target: $0, copy: false) }
+        moveItem.submenu = folderPickerMenu(model.folders) { [weak self] target in
+            guard let self = self else { return }
+            self.model.folders.moveSkill(skill.id, from: self.folderId, to: target); Sound.play(.move)
+        }
         menu.addItem(moveItem)
         let copyItem = NSMenuItem(title: "Copy to Folder", action: nil, keyEquivalent: "")
-        copyItem.submenu = folderTreeMenu { CtxPayload(skillId: skill.id, target: $0, copy: true) }
+        copyItem.submenu = folderPickerMenu(model.folders) { [weak self] target in
+            self?.model.folders.copySkill(skill.id, to: target); Sound.play(.move)
+        }
         menu.addItem(copyItem)
         menu.addItem(.separator())
-        menu.addItem(mi("Cut", #selector(ctxCutSkill(_:)), skill.id))
-        menu.addItem(mi("Copy", #selector(ctxCopySkillToClip(_:)), skill.id))
-        if currentFolderId != folders.rootId {
+        menu.addItem(simpleItem("Cut") { [weak self] in self?.setSkillClip(skill, cut: true) })
+        menu.addItem(simpleItem("Copy") { [weak self] in self?.setSkillClip(skill, cut: false) })
+        if folderId != model.folders.rootId {
             menu.addItem(.separator())
-            menu.addItem(mi("Remove from “\(currentFolderName())”", #selector(ctxRemoveSkill(_:)), skill.id))
+            menu.addItem(simpleItem("Remove from “\(model.folderName(folderId))”") { [weak self] in
+                guard let self = self else { return }
+                self.model.folders.moveSkill(skill.id, from: self.folderId, to: self.model.folders.rootId)
+            })
         }
         return menu
     }
 
     private func folderMenu(_ node: FolderStore.Node) -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(mi("Open", #selector(ctxOpenFolder(_:)), node.id))
-        menu.addItem(mi("Rename…", #selector(ctxRenameFolder(_:)), node.id))
-        menu.addItem(mi("New Folder Inside…", #selector(ctxNewSubfolder(_:)), node.id))
+        menu.addItem(simpleItem("Open") { [weak self] in self?.onOpenFolder?(node.id) })
+        menu.addItem(simpleItem("Rename…") { [weak self] in
+            promptForText(title: "Rename folder", default: node.name) { self?.model.folders.rename(node.id, to: $0) }
+        })
+        menu.addItem(simpleItem("New Folder Inside…") { [weak self] in
+            promptForText(title: "New folder name", default: "New Folder") { self?.model.folders.createFolder(name: $0, in: node.id) }
+        })
         menu.addItem(.separator())
-        menu.addItem(mi("Cut", #selector(ctxCutFolder(_:)), node.id))
+        menu.addItem(simpleItem("Cut") { [weak self] in self?.setFolderClip(node) })
         menu.addItem(.separator())
-        menu.addItem(mi("Delete Folder", #selector(ctxDeleteFolder(_:)), node.id))
+        menu.addItem(simpleItem("Delete Folder") { [weak self] in self?.confirmDeleteFolder(node) })
         return menu
     }
 
-    private func currentFolderName() -> String { folders.node(currentFolderId)?.name ?? "folder" }
-
-    /// Build a menu mirroring the folder tree; selecting a folder fires ctxApply with the payload.
-    private func folderTreeMenu(exclude: String? = nil, makePayload: @escaping (String) -> CtxPayload) -> NSMenu {
-        let menu = NSMenu()
-        func add(_ id: String, _ depth: Int) {
-            guard let node = folders.node(id), id != exclude else { return }
-            let title = String(repeating: "    ", count: depth) + (id == folders.rootId ? "All Skills" : node.name)
-            let item = NSMenuItem(title: title, action: #selector(ctxApply(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = makePayload(id)
-            menu.addItem(item)
-            for c in node.folders { add(c, depth + 1) }
-        }
-        add(folders.rootId, 0)
-        return menu
+    private func setSkillClip(_ skill: Skill, cut: Bool) {
+        model.clip = SkelfModel.Clip(id: skill.id, isFolder: false, cut: cut, source: folderId, name: skill.name)
+    }
+    private func setFolderClip(_ node: FolderStore.Node) {
+        model.clip = SkelfModel.Clip(id: node.id, isFolder: true, cut: true, source: node.parent ?? model.folders.rootId, name: node.name)
     }
 
-    private func showCopyToFolderMenu(_ skill: Skill, anchor: NSView) {
-        let menu = folderTreeMenu { CtxPayload(skillId: skill.id, target: $0, copy: true) }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 4), in: anchor)
-    }
-
-    @objc private func ctxOpenSkill(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? String, let s = store.skills.first(where: { $0.id == id }) { showDetail(s) }
-    }
-    @objc private func ctxCopySkill(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? String, let s = store.skills.first(where: { $0.id == id }) { onCopy(s) }
-    }
-    @objc private func ctxToggleFavorite(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? String { favorites.toggle(id) }
-    }
-    @objc private func ctxRemoveSkill(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? String { folders.moveSkill(id, from: currentFolderId, to: folders.rootId) }
-    }
-    @objc private func ctxOpenFolder(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? String { navigate(to: id) }
-    }
-    @objc private func ctxRenameFolder(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String, let node = folders.node(id) else { return }
-        promptText("Rename folder", node.name) { [weak self] name in self?.folders.rename(id, to: name) }
-    }
-    @objc private func ctxDeleteFolder(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String, let n = folders.node(id) else { return }
+    private func confirmDeleteFolder(_ n: FolderStore.Node) {
         let count = n.folders.count + n.skills.count
         if count > 0 {
             let a = NSAlert()
@@ -1807,60 +1523,183 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
             a.addButton(withTitle: "Cancel")
             if a.runModal() != .alertFirstButtonReturn { return }
         }
-        folders.deleteFolder(id)
+        model.folders.deleteFolder(n.id)
     }
-    @objc private func ctxApply(_ sender: NSMenuItem) {
-        guard let p = sender.representedObject as? CtxPayload else { return }
-        if let sid = p.skillId {
-            if p.copy { folders.copySkill(sid, to: p.target) }
-            else { folders.moveSkill(sid, from: p.source ?? folders.rootId, to: p.target) }
-        } else if let fid = p.folderId {
-            folders.moveFolder(fid, to: p.target)
+}
+
+// MARK: - SwiftUI navigation shell (Liquid Glass navigation + toolbars, macOS 26)
+
+enum Route: Hashable {
+    case folder(String)
+    case skill(String)
+}
+
+@Observable
+final class SkelfModel {
+    @ObservationIgnored let store: SkillStore
+    @ObservationIgnored let favorites: Favorites
+    @ObservationIgnored let folders: FolderStore
+    @ObservationIgnored let copySkill: (Skill) -> Void
+
+    var path: [Route] = []
+    var reloadToken = 0
+
+    struct Clip { let id: String; let isFolder: Bool; let cut: Bool; let source: String; let name: String }
+    var clip: Clip?
+
+    init(store: SkillStore, favorites: Favorites, folders: FolderStore, copySkill: @escaping (Skill) -> Void) {
+        self.store = store
+        self.favorites = favorites
+        self.folders = folders
+        self.copySkill = copySkill
+    }
+
+    func bumpReload() { reloadToken &+= 1 }
+    func skill(_ id: String) -> Skill? { store.skills.first { $0.id == id } }
+    func folderName(_ id: String) -> String { folders.node(id)?.name ?? "Folder" }
+
+    func openSkill(_ id: String) { if skill(id) != nil { path = [.skill(id)] } }
+    func enterFolder(_ id: String) {
+        guard folders.node(id) != nil else { return }
+        path = folders.path(to: id).map { $0.id }.filter { $0 != folders.rootId }.map { Route.folder($0) }
+    }
+
+    func newFolder(in parent: String) {
+        promptForText(title: "New folder name", default: "New Folder") { [weak self] name in
+            self?.folders.createFolder(name: name, in: parent)
         }
     }
 
-    // --- cut / copy / paste ---
-
-    @objc private func ctxCutSkill(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String, let s = store.skills.first(where: { $0.id == id }) else { return }
-        clip = Clip(id: id, isFolder: false, cut: true, source: currentFolderId, name: s.name)
-        updatePasteButton()
-    }
-    @objc private func ctxCopySkillToClip(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String, let s = store.skills.first(where: { $0.id == id }) else { return }
-        clip = Clip(id: id, isFolder: false, cut: false, source: currentFolderId, name: s.name)
-        updatePasteButton()
-    }
-    @objc private func ctxCutFolder(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String, let n = folders.node(id) else { return }
-        clip = Clip(id: id, isFolder: true, cut: true, source: n.parent ?? folders.rootId, name: n.name)
-        updatePasteButton()
-    }
-    @objc private func ctxNewSubfolder(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        promptText("New folder name", "New Folder") { [weak self] name in self?.folders.createFolder(name: name, in: id) }
-    }
-    @objc private func pasteTapped() {
+    func pasteInto(_ folderId: String) {
         guard let c = clip else { return }
-        if c.isFolder {
-            folders.moveFolder(c.id, to: currentFolderId)
-            clip = nil
-        } else if c.cut {
-            folders.moveSkill(c.id, from: c.source, to: currentFolderId)
-            clip = nil
-        } else {
-            folders.copySkill(c.id, to: currentFolderId)   // keep clipboard so you can paste into several folders
-        }
-        updatePasteButton()
+        if c.isFolder { folders.moveFolder(c.id, to: folderId); clip = nil }
+        else if c.cut { folders.moveSkill(c.id, from: c.source, to: folderId); clip = nil }
+        else { folders.copySkill(c.id, to: folderId) }   // keep clip for multi-paste
+        Sound.play(.move)
     }
-    private func updatePasteButton() {
-        if let c = clip {
-            pasteButton.isHidden = false
-            pasteButton.title = "Paste \(c.name)"
-            pasteButton.toolTip = c.cut ? "Move “\(c.name)” into this folder" : "Copy “\(c.name)” into this folder"
-        } else {
-            pasteButton.isHidden = true
+}
+
+struct SkelfRootView: View {
+    @Bindable var model: SkelfModel
+    var body: some View {
+        NavigationStack(path: $model.path) {
+            FolderScreen(model: model, folderId: model.folders.rootId)
+                .navigationDestination(for: Route.self) { route in
+                    switch route {
+                    case .folder(let id): FolderScreen(model: model, folderId: id)
+                    case .skill(let id): SkillDetailScreen(model: model, skillId: id)
+                    }
+                }
         }
+    }
+}
+
+struct FolderScreen: View {
+    let model: SkelfModel
+    let folderId: String
+    @State private var query = ""
+    @State private var filter = 0
+
+    var body: some View {
+        let token = model.reloadToken
+        let hasClip = model.clip != nil
+        let clipName = model.clip?.name ?? ""
+        GridRepresentable(model: model, folderId: folderId, query: query, filter: filter, token: token,
+                          onOpenSkill: { model.path.append(.skill($0)) },
+                          onOpenFolder: { model.path.append(.folder($0)) })
+            .navigationTitle(folderId == model.folders.rootId ? "Skelf" : model.folderName(folderId))
+            .searchable(text: $query, prompt: "Search this folder")
+            .toolbar {
+                ToolbarItem {
+                    Picker("Filter", selection: $filter) {
+                        Text("All").tag(0)
+                        Text("Enabled").tag(1)
+                        Text("Off").tag(2)
+                    }
+                    .pickerStyle(.menu)
+                }
+                if hasClip {
+                    ToolbarItem {
+                        Button { model.pasteInto(folderId) } label: {
+                            Label("Paste \(clipName)", systemImage: "doc.on.clipboard")
+                        }
+                    }
+                }
+                ToolbarItem {
+                    Button { model.newFolder(in: folderId) } label: {
+                        Label("New Folder", systemImage: "folder.badge.plus")
+                    }
+                }
+            }
+    }
+}
+
+struct SkillDetailScreen: View {
+    let model: SkelfModel
+    let skillId: String
+
+    var body: some View {
+        let token = model.reloadToken
+        let fav = model.favorites.isFavorite(skillId)
+        DetailRepresentable(model: model, skillId: skillId, token: token)
+            .navigationTitle(model.skill(skillId)?.name ?? skillId)
+            .toolbar {
+                ToolbarItem {
+                    Button { if let s = model.skill(skillId) { model.copySkill(s) } } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                }
+                ToolbarItem {
+                    Button { model.favorites.toggle(skillId) } label: {
+                        Label("Favorite", systemImage: fav ? "star.fill" : "star")
+                    }
+                }
+            }
+    }
+}
+
+struct GridRepresentable: NSViewControllerRepresentable {
+    let model: SkelfModel
+    let folderId: String
+    let query: String
+    let filter: Int
+    let token: Int
+    let onOpenSkill: (String) -> Void
+    let onOpenFolder: (String) -> Void
+
+    func makeNSViewController(context: Context) -> GridViewController {
+        let vc = GridViewController(model: model, folderId: folderId)
+        vc.onOpenSkill = onOpenSkill
+        vc.onOpenFolder = onOpenFolder
+        return vc
+    }
+    func updateNSViewController(_ vc: GridViewController, context: Context) {
+        vc.onOpenSkill = onOpenSkill
+        vc.onOpenFolder = onOpenFolder
+        vc.apply(query: query, filter: filter, token: token)
+    }
+}
+
+struct DetailRepresentable: NSViewRepresentable {
+    let model: SkelfModel
+    let skillId: String
+    let token: Int
+
+    func makeNSView(context: Context) -> SkillDetailView {
+        let v = SkillDetailView(frame: .zero)
+        v.setShowsBackBar(false)
+        v.onCopy = { model.copySkill($0) }
+        v.onToggleFavorite = { model.favorites.toggle($0.id) }
+        v.onOrganize = { skill, anchor in
+            let menu = folderPickerMenu(model.folders) { target in
+                model.folders.copySkill(skill.id, to: target); Sound.play(.move)
+            }
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 4), in: anchor)
+        }
+        return v
+    }
+    func updateNSView(_ v: SkillDetailView, context: Context) {
+        if let s = model.skill(skillId) { v.configure(s, isFavorite: model.favorites.isFavorite(skillId)) }
     }
 }
 
@@ -2566,7 +2405,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     let undoManager = UndoManager()
     var statusItem: NSStatusItem!
     var window: NSWindow?
-    var viewController: SkillsViewController?
+    var model: SkelfModel?
     var watcher: SkillWatcher?
     let popover = NSPopover()
     var popoverController: PopoverListController?
@@ -2579,7 +2418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         dlog("launched -> \(store.skills.count) skills")
         // a pin OR a folder change anywhere re-renders both the window and the popover
         let refreshAll: () -> Void = { [weak self] in
-            self?.viewController?.refreshFromStore()
+            self?.model?.bumpReload()
             self?.popoverController?.reload()
         }
         favorites.onChange = refreshAll
@@ -2589,10 +2428,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         showWindow()
         startWatching()
         if let i = CommandLine.arguments.firstIndex(of: "--open"), i + 1 < CommandLine.arguments.count {
-            viewController?.openDetail(id: CommandLine.arguments[i + 1])
+            model?.openSkill(CommandLine.arguments[i + 1])
         }
         if let i = CommandLine.arguments.firstIndex(of: "--enter"), i + 1 < CommandLine.arguments.count {
-            viewController?.enterFolder(id: CommandLine.arguments[i + 1])
+            model?.enterFolder(CommandLine.arguments[i + 1])
         }
         if CommandLine.arguments.contains("--popover") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.togglePopover(nil) }
@@ -2657,7 +2496,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         store.reload()
         folders.syncInstalled(Set(store.skills.map { $0.id }))
         popoverController?.reload()
-        viewController?.refreshFromStore(auto: auto)
+        model?.bumpReload()
         dlog("reload(auto: \(auto)) -> \(store.skills.count) skills")
     }
 
@@ -2704,7 +2543,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             ctrl.onOpen = { [weak self] skill in
                 self?.popover.performClose(nil)
                 self?.showWindow()
-                self?.viewController?.openDetail(id: skill.id)
+                self?.model?.openSkill(skill.id)
             }
             ctrl.onOpenApp = { [weak self] in
                 self?.popover.performClose(nil)
@@ -2733,14 +2572,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 
     private func showWindow() {
         if window == nil {
-            let vc = SkillsViewController(store: store, favorites: favorites, folders: folders, onCopy: { [weak self] skill in self?.copy(skill) })
-            viewController = vc
+            let m = SkelfModel(store: store, favorites: favorites, folders: folders,
+                               copySkill: { [weak self] skill in self?.copy(skill) })
+            model = m
+            // SwiftUI navigation shell, bridged into the AppKit window so its
+            // .navigationTitle + .toolbar drive the window's Liquid Glass toolbar.
+            let host = NSHostingController(rootView: SkelfRootView(model: m))
+            host.sceneBridgingOptions = [.title, .toolbars]
             // Create with an explicit frame, THEN attach the content VC, so the window
-            // keeps 760×580 instead of collapsing to the grid's (sizeless) fitting size.
+            // keeps 760×580 instead of collapsing to the content's fitting size.
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 580),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
                              backing: .buffered, defer: false)
-            w.contentViewController = vc
+            w.contentViewController = host
             w.title = "Skelf"
             w.minSize = NSSize(width: 640, height: 440)
             w.setContentSize(NSSize(width: 760, height: 580))
