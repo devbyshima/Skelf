@@ -262,6 +262,31 @@ final class FolderStore {
         var parent: String?      // nil only for root
         var folders: [String]    // child folder ids (ordered)
         var skills: [String]     // skill ids placed here (ordered)
+        var autoCreator: String? // non-nil => auto-folder grouping one creator's skills
+        var showInMenuBar: Bool  // user opted this folder into the menu-bar popover
+
+        enum CodingKeys: String, CodingKey { case id, name, parent, folders, skills, autoCreator, showInMenuBar }
+        init(id: String, name: String, parent: String?, folders: [String], skills: [String],
+             autoCreator: String? = nil, showInMenuBar: Bool = false) {
+            self.id = id; self.name = name; self.parent = parent; self.folders = folders
+            self.skills = skills; self.autoCreator = autoCreator; self.showInMenuBar = showInMenuBar
+        }
+        init(from d: Decoder) throws {                     // tolerant of older saved trees
+            let c = try d.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            name = try c.decode(String.self, forKey: .name)
+            parent = try c.decodeIfPresent(String.self, forKey: .parent)
+            folders = try c.decode([String].self, forKey: .folders)
+            skills = try c.decode([String].self, forKey: .skills)
+            autoCreator = try c.decodeIfPresent(String.self, forKey: .autoCreator)
+            showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .showInMenuBar) ?? false
+        }
+    }
+
+    /// The creator/owner shown as the auto-folder name, derived from a skill's source.
+    static func creatorName(_ source: String) -> String {
+        if source.isEmpty || source == "local" { return "Local" }
+        return source.split(separator: "/").first.map(String.init) ?? source
     }
 
     private(set) var nodes: [String: Node] = [:]
@@ -407,6 +432,55 @@ final class FolderStore {
             nodes[rootId]?.skills.append(sid); changed = true
         }
         if changed { persist(notify: false) }
+    }
+
+    /// Group each creator's skills into an auto-folder. Root is "unfiled": any skill
+    /// sitting at root is moved into its creator's auto-folder (created on demand);
+    /// skills the user has filed into their own folders are left untouched. Runs on
+    /// every reload, so newly-installed skills self-file under their creator.
+    func autoCategorize(_ installed: [Skill]) {
+        var changed = false
+        let creatorOf = Dictionary(installed.map { ($0.id, Self.creatorName($0.source)) },
+                                   uniquingKeysWith: { a, _ in a })
+
+        func autoFolderId(for creator: String) -> String {
+            if let existing = nodes.values.first(where: { $0.autoCreator == creator }) { return existing.id }
+            let id = "auto-" + UUID().uuidString.prefix(8)
+            nodes[id] = Node(id: id, name: creator, parent: rootId, folders: [], skills: [], autoCreator: creator)
+            nodes[rootId]?.folders.append(id)
+            changed = true
+            return id
+        }
+
+        for sid in (nodes[rootId]?.skills ?? []) {
+            guard let creator = creatorOf[sid] else { continue }
+            let fid = autoFolderId(for: creator)
+            nodes[rootId]?.skills.removeAll { $0 == sid }
+            if !(nodes[fid]?.skills.contains(sid) ?? true) { nodes[fid]?.skills.append(sid) }
+            changed = true
+        }
+
+        // drop auto-folders that ended up empty (e.g. their creator's skills were uninstalled)
+        for (id, n) in nodes where n.autoCreator != nil && n.skills.isEmpty && n.folders.isEmpty {
+            if let p = n.parent { nodes[p]?.folders.removeAll { $0 == id } }
+            nodes[id] = nil
+            changed = true
+        }
+        if changed { persist(notify: false) }
+    }
+
+    // --- menu-bar opt-in (folders are hidden from the popover until the user adds them) ---
+    func showsInMenuBar(_ id: String) -> Bool { nodes[id]?.showInMenuBar ?? false }
+
+    func setShowInMenuBar(_ id: String, _ on: Bool) {
+        guard id != rootId, nodes[id] != nil else { return }
+        apply(on ? "Add to Menu Bar" : "Remove from Menu Bar") { nodes[id]?.showInMenuBar = on }
+    }
+
+    /// Folders the user has opted into the menu-bar popover (flat, alphabetical).
+    func menuBarFolders() -> [Node] {
+        nodes.values.filter { $0.showInMenuBar }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 }
 
@@ -1516,6 +1590,13 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
             promptForText(title: "New folder name", default: "New Folder") { self?.model.folders.createFolder(name: $0, in: node.id) }
         })
         menu.addItem(.separator())
+        let inBar = model.folders.showsInMenuBar(node.id)
+        let barItem = simpleItem(inBar ? "Remove from Menu Bar" : "Add to Menu Bar") { [weak self] in
+            self?.model.folders.setShowInMenuBar(node.id, !inBar)
+        }
+        if inBar { barItem.state = .on }
+        menu.addItem(barItem)
+        menu.addItem(.separator())
         menu.addItem(simpleItem("Cut") { [weak self] in self?.setFolderClip(node) })
         menu.addItem(.separator())
         menu.addItem(simpleItem("Delete Folder") { [weak self] in self?.confirmDeleteFolder(node) })
@@ -2116,9 +2197,9 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
             else { addSection("Results", matched.map { skillRow($0) }) }
         } else if currentId == folders.rootId {
             let favs = favorites.ordered(store.skills.filter { favorites.isFavorite($0.id) })
-            let folderRows = folders.childFolders(of: currentId).map { folderRow($0) }
+            let folderRows = folders.menuBarFolders().map { folderRow($0) }   // only user-opted-in folders
             if favs.isEmpty && folderRows.isEmpty {
-                addEmpty("No favorites or folders yet.\nPin skills with ★ or create folders in the app —\nor search above to copy any skill.")
+                addEmpty("Nothing pinned to the menu bar yet.\nFavorite a skill, or add a folder via its ⋯ → Add to Menu Bar —\nor search above to copy any skill.")
             } else {
                 if !favs.isEmpty { addSection("Favorites", favs.map { skillRow($0) }) }
                 if !folderRows.isEmpty { addSection("Folders", folderRows) }
@@ -2430,6 +2511,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         store.reload()
         folders.undoManager = undoManager
         folders.syncInstalled(Set(store.skills.map { $0.id }))
+        folders.autoCategorize(store.skills)
         setupMainMenu()
         dlog("launched -> \(store.skills.count) skills")
         // a pin OR a folder change anywhere re-renders both the window and the popover
@@ -2511,6 +2593,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     private func reloadFromDisk(auto: Bool) {
         store.reload()
         folders.syncInstalled(Set(store.skills.map { $0.id }))
+        folders.autoCategorize(store.skills)
         popoverController?.reload()
         model?.bumpReload()
         dlog("reload(auto: \(auto)) -> \(store.skills.count) skills")
