@@ -11,6 +11,20 @@ SwiftUI `NavigationStack` + Liquid Glass toolbars (bridged via
 target, split into focused files under `Sources/Skelf/`. Targets **macOS 26** (Liquid Glass);
 needs **Xcode 26+** for the macOS 26 SDK and SwiftUI's macro plugin.
 
+## Install
+
+**Requires macOS 26 (Tahoe) or later.**
+
+1. Download `Skelf.dmg` from the [latest release](https://github.com/devbyshima/Skelf/releases/latest).
+2. Open it and drag **Skelf** onto **Applications**.
+3. **First launch:** Skelf isn't yet signed with an Apple Developer ID, so macOS blocks it the
+   first time. Open **System Settings → Privacy & Security**, scroll to the bottom, click
+   **Open Anyway**, then confirm **Open** — you only do this once. (The old right-click → Open
+   shortcut no longer works on macOS 15+.) Launch at Login works best once Skelf is in
+   `/Applications`.
+
+Prefer to build it yourself? See [Build & run](#build--run) below.
+
 ## Build & run
 
 ```bash
@@ -67,10 +81,12 @@ and settings persist in `UserDefaults` (`dev.fulltime.skelf`).
 ## CLI modes (no GUI)
 
 ```bash
-./Skelf.app/Contents/MacOS/Skelf --list            # print all skills + state
-./Skelf.app/Contents/MacOS/Skelf --copy humanizer  # put /humanizer on the clipboard
-open Skelf.app --args --open humanizer             # launch into a skill's detail
-open Skelf.app --args --popover                    # launch with the popover open
+./Skelf.app/Contents/MacOS/Skelf --version          # print the version and exit
+./Skelf.app/Contents/MacOS/Skelf --list             # print all skills + state
+./Skelf.app/Contents/MacOS/Skelf --copy <skill-id>  # put /<skill-id> on the clipboard (e.g. humanizer)
+open Skelf.app --args --open <skill-id>             # launch into a skill's detail
+open Skelf.app --args --enter <folder>              # launch into a folder
+open Skelf.app --args --popover                     # launch with the popover open
 ```
 
 ## Layout
@@ -85,5 +101,21 @@ Resources/                  # app-packaging: Skelf.icns · AppIcon/
 build.sh                    # swiftc → Skelf.app (git-ignored build artifact)
 ```
 
-See `CONTRIBUTING.md` for the per-file breakdown. Ad-hoc signed (personal local use); Launch
-at Login registers reliably only for a signed app in `/Applications`.
+See `CONTRIBUTING.md` for the per-file breakdown.
+
+## Privacy
+
+Skelf reads your skills from disk and contacts only three hosts, all over HTTPS: `api.artic.edu`
+and `www.artic.edu` (public-domain paintings) and `github.com` (creator avatars). It sends only a
+skill keyword plus standard request headers — no account, no analytics, no telemetry. Images cache
+under `~/Library/Caches/dev.fulltime.skelf/`; folders, favorites, and settings live in
+`UserDefaults`. Turn network art off entirely with **Settings → Show Painting Covers**.
+
+## Credits
+
+Made by **FullTime Studio** ([@devbyshima](https://github.com/devbyshima)). Painting imagery
+courtesy of the [Art Institute of Chicago](https://www.artic.edu/), in the public domain.
+
+## License
+
+[MIT](LICENSE) © 2026 FullTime Studio.

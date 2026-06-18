@@ -244,8 +244,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     }
 
     private func dlog(_ s: String) {
-        if ProcessInfo.processInfo.environment["SKILLSHELF_DEBUG"] != nil {
-            FileHandle.standardError.write(("[skillshelf] " + s + "\n").data(using: .utf8)!)
+        if ProcessInfo.processInfo.environment["SKELF_DEBUG"] != nil {
+            FileHandle.standardError.write(("[skelf] " + s + "\n").data(using: .utf8)!)
         }
     }
 
@@ -350,8 +350,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 // MARK: - Entry point
 
 @main
-struct SkillShelfMain {
+struct SkelfMain {
     static func main() {
+        if CommandLine.arguments.contains("--version") || CommandLine.arguments.contains("-v") {
+            print("Skelf \(skelfShortVersion) (build \(skelfBuildVersion))")
+            exit(0)
+        }
         if CommandLine.arguments.contains("--list") {
             let store = SkillStore()
             store.reload()
@@ -363,12 +367,16 @@ struct SkillShelfMain {
             }
             exit(0)
         }
-        if let idx = CommandLine.arguments.firstIndex(of: "--copy"), idx + 1 < CommandLine.arguments.count {
+        if let idx = CommandLine.arguments.firstIndex(of: "--copy") {
+            guard idx + 1 < CommandLine.arguments.count else {
+                FileHandle.standardError.write(Data("usage: Skelf --copy <skill-id>\n".utf8))
+                exit(1)
+            }
             let id = CommandLine.arguments[idx + 1]
             let store = SkillStore()
             store.reload()
             guard let skill = store.skills.first(where: { $0.id == id }) else {
-                FileHandle.standardError.write("no such skill: \(id)\n".data(using: .utf8)!)
+                FileHandle.standardError.write(Data("no such skill: \(id)\n".utf8))
                 exit(1)
             }
             let pb = NSPasteboard.general

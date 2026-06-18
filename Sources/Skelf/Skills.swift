@@ -130,7 +130,7 @@ final class SkillStore {
     }
 
     static func parseFrontmatter(_ url: URL) -> (name: String?, description: String?, version: String?) {
-        var name: String? = nil, desc: String? = nil, version: String? = nil
+        var name: String?, desc: String?, version: String?
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return (name, desc, version) }
         let lines = text.components(separatedBy: "\n")
         guard let first = lines.first, first.trimmingCharacters(in: .whitespaces) == "---" else {
@@ -230,7 +230,7 @@ final class SkillWatcher {
         var context = FSEventStreamContext(version: 0,
                                            info: Unmanaged.passUnretained(self).toOpaque(),
                                            retain: nil, release: nil, copyDescription: nil)
-        let callback: FSEventStreamCallback = { (_, info, _, _, _, _) in
+        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
             guard let info = info else { return }
             Unmanaged<SkillWatcher>.fromOpaque(info).takeUnretainedValue().scheduleReload()
         }
@@ -524,4 +524,3 @@ final class FolderStore {
 // The special "Favorites" folder is virtual (not a real FolderStore.Node) — it gathers
 // every favorited skill and is shown first on the home grid with a distinct look.
 let favoritesFolderId = "__favorites__"
-

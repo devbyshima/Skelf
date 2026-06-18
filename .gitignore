@@ -1,6 +1,7 @@
 # Build output
 Skelf.app/
 *.dmg
+SHA256SUMS
 *.swiftmodule
 *.swiftdoc
 *.o

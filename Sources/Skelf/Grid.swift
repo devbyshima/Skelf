@@ -135,7 +135,7 @@ final class SectionHeaderView: NSView {
         addSubview(label)
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -193,7 +193,7 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
             gridScroll.topAnchor.constraint(equalTo: root.topAnchor),
             gridScroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             gridScroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            gridScroll.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            gridScroll.bottomAnchor.constraint(equalTo: root.bottomAnchor)
         ])
         view = root
     }
@@ -226,8 +226,7 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
         let rebuild = query != self.query || token != lastToken || favNeedsRebuild
         self.query = query; lastToken = token; lastFavToken = favToken
         guard isViewLoaded else { return }
-        if rebuild { reload() }
-        else if favChanged { refreshFavorites() }
+        if rebuild { reload() } else if favChanged { refreshFavorites() }
     }
 
     // Clear any hover tip first: reloadData() tears down items without firing mouseExited,
@@ -455,4 +454,3 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
 }
 
 // MARK: - SwiftUI navigation shell (Liquid Glass navigation + toolbars, macOS 26)
-

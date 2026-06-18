@@ -13,3 +13,9 @@ var skelfResourceBundle: Bundle {
     return .main
     #endif
 }
+
+/// Skelf's version strings, read from the bundle's Info.plist (the single source of truth is
+/// `SKELF_VERSION` in build.sh, which writes `CFBundleShortVersionString`). Plain `swift build`
+/// runs have no Info.plist, so these report "dev"/"0".
+var skelfShortVersion: String { (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev" }
+var skelfBuildVersion: String { (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "0" }

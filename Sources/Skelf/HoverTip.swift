@@ -43,7 +43,7 @@ final class SkillHoverTip {
             glass.topAnchor.constraint(equalTo: container.topAnchor),
             glass.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             glass.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            glass.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            glass.trailingAnchor.constraint(equalTo: container.trailingAnchor)
         ])
 
         for l in [nameLabel, cmdLabel, metaLabel] { l.lineBreakMode = .byTruncatingTail; l.maximumNumberOfLines = 1 }
@@ -69,7 +69,7 @@ final class SkillHoverTip {
             stack.leadingAnchor.constraint(equalTo: inner.leadingAnchor, constant: padX),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: inner.trailingAnchor, constant: -padX),
             stack.topAnchor.constraint(equalTo: inner.topAnchor, constant: padY),
-            stack.bottomAnchor.constraint(equalTo: inner.bottomAnchor, constant: -padY),
+            stack.bottomAnchor.constraint(equalTo: inner.bottomAnchor, constant: -padY)
         ])
         glass.contentView = inner
     }
