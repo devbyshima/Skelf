@@ -34,6 +34,9 @@ PLIST
 [ -f "$RES/Skelf.icns" ] && cp "$RES/Skelf.icns" "$APP/Contents/Resources/Skelf.icns"
 # Menu-bar icon: the Skelf mark (loaded as a vector template image at runtime).
 [ -f "$RES/skelf.svg" ] && cp "$RES/skelf.svg" "$APP/Contents/Resources/skelf.svg"
+# Per-skill Creative-Commons art map (skill id → CC image URL); optional — the app
+# generates a themed fallback for any skill not listed.
+[ -f "$RES/art-map.json" ] && cp "$RES/art-map.json" "$APP/Contents/Resources/art-map.json"
 
 # SwiftUI uses external macros (@State, @Bindable, …) whose compiler plugin
 # (libSwiftUIMacros.dylib) ships only inside Xcode, NOT the Command Line Tools.

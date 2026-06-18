@@ -721,6 +721,116 @@ final class AvatarStore {
     }
 }
 
+// Per-skill card art: a UNIQUE, publicly-available (Creative-Commons) image themed to
+// each skill, sourced from a bundled `art-map.json` (skill id → CC image URL, deduped so
+// no two skills share art). Downloads are disk-cached like avatars. A skill with no map
+// entry (or offline) falls back to a GENERATED themed image (unique gradient + a
+// purpose-matched icon) — so every skill always has its own distinct art. Folders keep
+// their creator avatar (AvatarStore); only skill cards use this.
+final class ArtStore {
+    static let shared = ArtStore()
+    struct Entry: Decodable { let url: String; let by: String?; let license: String? }
+    private var map: [String: Entry] = [:]
+    private var mem: [String: NSImage] = [:]
+    private var failed: Set<String> = []
+    private var inflight: Set<String> = []
+    private let dir: URL
+
+    init() {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        dir = base.appendingPathComponent("dev.fulltime.skelf/art", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let u = Bundle.main.url(forResource: "art-map", withExtension: "json"),
+           let d = try? Data(contentsOf: u),
+           let m = try? JSONDecoder().decode([String: Entry].self, from: d) {
+            map = m
+        }
+    }
+
+    private func diskURL(_ id: String) -> URL {
+        dir.appendingPathComponent(id.replacingOccurrences(of: "/", with: "_") + ".img")
+    }
+
+    /// Synchronous cache hit for already-downloaded CC art; nil if not (yet) available.
+    func cached(_ id: String) -> NSImage? {
+        if let i = mem[id] { return i }
+        if let i = NSImage(contentsOf: diskURL(id)) { mem[id] = i; return i }
+        return nil
+    }
+
+    func hasArt(_ id: String) -> Bool { map[id] != nil }
+    func attribution(_ id: String) -> String? {
+        guard let e = map[id] else { return nil }
+        let parts = [e.by, e.license].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// Download the mapped CC art if needed; calls back on main with the image, or nil if
+    /// there's no mapping / it fails (caller keeps the themed fallback). Call on main.
+    func fetch(_ id: String, completion: @escaping (NSImage?) -> Void) {
+        if let i = cached(id) { completion(i); return }
+        guard let entry = map[id], let url = URL(string: entry.url) else { completion(nil); return }
+        if failed.contains(id) { completion(nil); return }
+        if inflight.contains(id) { return }
+        inflight.insert(id)
+        var req = URLRequest(url: url)
+        req.setValue("Skelf/1.0 (skill art)", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.inflight.remove(id)
+                if let data = data, let img = NSImage(data: data) {
+                    try? data.write(to: self.diskURL(id))
+                    self.mem[id] = img
+                    completion(img)
+                } else {
+                    self.failed.insert(id)
+                    completion(nil)
+                }
+            }
+        }.resume()
+    }
+}
+
+// Pick a purpose-matched SF Symbol for a skill's generated fallback art, by scanning its
+// name/category/description for evocative keywords.
+func artSymbol(for skill: Skill) -> String {
+    let hay = (skill.name + " " + skill.category + " " + skill.description).lowercased()
+    let table: [(String, String)] = [
+        ("animation", "play.circle"), ("animate", "play.circle"), ("motion", "wind"), ("spring", "wind"),
+        ("sound", "waveform"), ("audio", "waveform"), ("voice", "waveform"),
+        ("icon", "square.grid.2x2"), ("morph", "square.on.square.dashed"),
+        ("test", "checkmark.seal"), ("tdd", "checkmark.seal"), ("qa", "checkmark.seal"),
+        ("bug", "ladybug"), ("diagnos", "stethoscope"), ("debug", "ladybug"),
+        ("refactor", "wand.and.stars"), ("architecture", "building.columns"), ("scaffold", "square.stack.3d.up"),
+        ("design", "paintbrush"), ("interface", "rectangle.3.group"), ("ui", "rectangle.3.group"),
+        ("prototype", "scribble.variable"), ("sketch", "scribble.variable"),
+        ("domain", "cube"), ("model", "cube"), ("language", "character.bubble"),
+        ("prd", "doc.text"), ("article", "doc.richtext"), ("writing", "pencil.line"), ("write", "pencil.line"),
+        ("issue", "tray.full"), ("triage", "tray.and.arrow.down"), ("handoff", "arrow.left.arrow.right"),
+        ("git", "arrow.triangle.branch"), ("merge", "arrow.triangle.merge"), ("commit", "arrow.triangle.branch"),
+        ("review", "checklist"), ("decision", "signpost.right"), ("map", "map"),
+        ("teach", "graduationcap"), ("grill", "flame"), ("ask", "bubble.left.and.bubble.right"),
+        ("interview", "bubble.left.and.bubble.right"), ("docs", "books.vertical"),
+        ("obsidian", "square.stack"), ("vault", "lock.square"), ("market", "megaphone"),
+        ("human", "person.and.background.dotted"), ("caveman", "figure.walk"), ("zoom", "magnifyingglass"),
+        ("pre-commit", "checkmark.shield"), ("guardrail", "shield.lefthalf.filled"),
+        ("shoehorn", "shippingbox"), ("migrate", "arrow.up.forward.square"),
+        ("principle", "list.number"), ("fragment", "puzzlepiece"), ("shape", "scribble"),
+        ("beat", "metronome"), ("ubiquitous", "character.bubble"), ("exercise", "figure.run"),
+    ]
+    for (kw, sym) in table where hay.contains(kw) { return sym }
+    // category-based default, else a generic spark
+    switch skill.category.lowercased() {
+    case "engineering": return "hammer"
+    case "productivity": return "bolt"
+    case "in-progress": return "hourglass"
+    case "deprecated": return "archivebox"
+    default: return "sparkles"
+    }
+}
+
 // A skill/folder "image": a single cached bitmap layer (creator avatar, or a
 // pre-rendered gradient fallback) + a bottom scrim. No live gradients/text layers,
 // so scrolling stays smooth.
@@ -756,6 +866,33 @@ final class SkillArtView: NSView {
         imageLayer.contents = image.cgImage(forProposedRect: &r, context: nil, hints: nil)
     }
     func setFavoritesArt() { imageLayer.contents = Self.favoritesImage() }
+    func setThemedFallback(_ skill: Skill) { imageLayer.contents = Self.themedImage(skill) }
+
+    // Generated per-skill fallback art: a gradient seeded by the skill's id (so it's
+    // unique to that skill) overlaid with a faint purpose-matched icon.
+    private static var themedCache: [String: CGImage] = [:]
+    static func themedImage(_ skill: Skill) -> CGImage {
+        if let c = themedCache[skill.id] { return c }
+        let size = CGSize(width: 320, height: 420)
+        let img = NSImage(size: size)
+        img.lockFocus()
+        let cols = Palette.gradientColors(skill.id).compactMap { NSColor(cgColor: $0) }
+        if cols.count >= 2, let g = NSGradient(starting: cols[0], ending: cols[1]) {
+            g.draw(in: NSRect(origin: .zero, size: size), angle: 55)
+        }
+        let cfg = NSImage.SymbolConfiguration(pointSize: size.width * 0.34, weight: .semibold)
+            .applying(.init(hierarchicalColor: .white))
+        if let icon = NSImage(systemSymbolName: artSymbol(for: skill), accessibilityDescription: nil)?
+            .withSymbolConfiguration(cfg) {
+            let p = NSPoint(x: (size.width - icon.size.width) / 2, y: size.height * 0.44)
+            icon.draw(at: p, from: .zero, operation: .sourceOver, fraction: 0.30)
+        }
+        img.unlockFocus()
+        var r = CGRect(origin: .zero, size: size)
+        let cg = img.cgImage(forProposedRect: &r, context: nil, hints: nil) ?? CGImage.empty
+        themedCache[skill.id] = cg
+        return cg
+    }
 
     // A deliberately distinct look for the special "Favorites" folder: a warm
     // amber→rose gradient with a big translucent star — unlike any avatar/gradient card.
@@ -890,8 +1027,6 @@ final class SkillGridItem: NSCollectionViewItem {
     private var favCircle: GlassCircleButton!
     private var menuCircle: GlassCircleButton!
     private let nameLabel = NSTextField(labelWithString: "")
-    private let initiatorBox = NSView()
-    private let initiatorLabel = NSTextField(labelWithString: "")
     private let descLabel = NSTextField(wrappingLabelWithString: "")
     private let copyButton = NSButton()
     private var hovering = false
@@ -918,17 +1053,6 @@ final class SkillGridItem: NSCollectionViewItem {
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(nameLabel)
-
-        initiatorBox.wantsLayer = true
-        initiatorBox.layer?.cornerRadius = 11
-        initiatorBox.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.44).cgColor
-        initiatorBox.translatesAutoresizingMaskIntoConstraints = false
-        initiatorLabel.font = .systemFont(ofSize: 11, weight: .semibold)
-        initiatorLabel.textColor = .white
-        initiatorLabel.lineBreakMode = .byTruncatingTail
-        initiatorLabel.translatesAutoresizingMaskIntoConstraints = false
-        initiatorBox.addSubview(initiatorLabel)
-        root.addSubview(initiatorBox)
 
         descLabel.font = .systemFont(ofSize: 12)
         descLabel.textColor = NSColor.white.withAlphaComponent(0.82)
@@ -968,19 +1092,9 @@ final class SkillGridItem: NSCollectionViewItem {
 
             nameLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             nameLabel.bottomAnchor.constraint(equalTo: descLabel.topAnchor, constant: -6),
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: initiatorBox.leadingAnchor, constant: -8),
-
-            initiatorBox.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            initiatorBox.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
-            initiatorBox.heightAnchor.constraint(equalToConstant: 22),
-            initiatorBox.widthAnchor.constraint(lessThanOrEqualToConstant: 104),
-            initiatorLabel.leadingAnchor.constraint(equalTo: initiatorBox.leadingAnchor, constant: 9),
-            initiatorLabel.trailingAnchor.constraint(equalTo: initiatorBox.trailingAnchor, constant: -9),
-            initiatorLabel.centerYAnchor.constraint(equalTo: initiatorBox.centerYAnchor),
+            nameLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
         ])
         nameLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
-        initiatorBox.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        initiatorLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         root.addTrackingArea(NSTrackingArea(rect: .zero,
             options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self, userInfo: nil))
         view = root
@@ -991,28 +1105,22 @@ final class SkillGridItem: NSCollectionViewItem {
             attributes: [.foregroundColor: NSColor.black, .font: NSFont.systemFont(ofSize: 14, weight: .bold)])
     }
 
-    func configure(_ skill: Skill, isFavorite: Bool, verified: Bool) {
+    func configure(_ skill: Skill, isFavorite: Bool) {
         skillId = skill.id
-        // Only show the creator's avatar once the skill's page is verified to belong to
-        // them — unverified/removed skills fall back to the generated gradient.
-        let creator = (verified && skill.source.contains("/")) ? skill.source.split(separator: "/").first.map(String.init) : nil
-        artKey = creator ?? ("grad:" + skill.name)
-        if let creator = creator, let img = AvatarStore.shared.cached(creator) {
+        artKey = skill.id
+        // Each skill card wears its own unique art: the mapped Creative-Commons image when
+        // available, otherwise an immediate generated themed fallback (gradient + icon).
+        if let img = ArtStore.shared.cached(skill.id) {
             art.setAvatar(img)
         } else {
-            art.setGradient(skill.name)
-            if let creator = creator {
-                let key = artKey
-                AvatarStore.shared.fetch(creator) { [weak self] img in
-                    guard let self = self, self.artKey == key, let img = img else { return }
-                    self.art.setAvatar(img)
-                }
+            art.setThemedFallback(skill)
+            let key = skill.id
+            ArtStore.shared.fetch(skill.id) { [weak self] img in
+                guard let self = self, self.artKey == key, let img = img else { return }
+                self.art.setAvatar(img)   // upgrade the fallback to the real CC art
             }
         }
         nameLabel.stringValue = skill.name
-        initiatorLabel.stringValue = skill.enabled ? skill.category : "off"
-        initiatorBox.layer?.backgroundColor = (skill.enabled ? NSColor.black.withAlphaComponent(0.44)
-                                                             : NSColor.systemRed.withAlphaComponent(0.55)).cgColor
         descLabel.stringValue = skill.description.isEmpty ? "No description in SKILL.md." : skill.description
         setFavorite(isFavorite, animated: false)
         setCopyTitle("Copy")
@@ -2093,10 +2201,6 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
         q.isEmpty || s.name.lowercased().contains(q) || s.description.lowercased().contains(q)
             || s.category.lowercased().contains(q) || s.source.lowercased().contains(q)
     }
-    private func skillVerified(_ s: Skill) -> Bool {
-        guard let u = s.skillGithubURL?.absoluteString else { return false }
-        return GitHubVerifier.shared.status(u) == true
-    }
 
     private func buildEntries() {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -2184,7 +2288,7 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
         case .skill(let skill):
             let item = cv.makeItem(withIdentifier: skillItemID, for: indexPath)
             if let grid = item as? SkillGridItem {
-                grid.configure(skill, isFavorite: model.favorites.isFavorite(skill.id), verified: skillVerified(skill))
+                grid.configure(skill, isFavorite: model.favorites.isFavorite(skill.id))
                 grid.onToggleFavorite = { [weak self] in self?.model.favorites.toggle(skill.id) }
                 grid.onCopy = { [weak self] in self?.model.copySkill(skill) }
                 grid.onMenu = { [weak self] anchor in
