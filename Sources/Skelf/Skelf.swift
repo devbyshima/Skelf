@@ -758,18 +758,16 @@ final class CardRootView: NSView {
 }
 
 // A Liquid-Glass circular control overlaid on a card (favorite / ⋯).
-// A frosted circular control overlaid on a card (favorite / ⋯). A *static* translucent
-// disc with a hairline rim — looks glassy but, unlike NSGlassEffectView, doesn't
-// re-sample the backdrop every frame, so a wall of them scrolls/hovers smoothly.
+// A real Liquid-Glass circular control overlaid on a card (favorite / ⋯). To keep a
+// gridful of them performant, the card groups its glass controls inside an
+// NSGlassEffectContainerView (see makeGlassControls) so they share ONE backdrop
+// sampling pass instead of one each.
 final class GlassCircleButton: NSView {
     let button = NSButton()
+    let glass = NSGlassEffectView()
     init(symbol: String, target: AnyObject, action: Selector) {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 15
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.34).cgColor
-        layer?.borderWidth = 0.75
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.28).cgColor
         translatesAutoresizingMaskIntoConstraints = false
         button.isBordered = false
         button.bezelStyle = .regularSquare
@@ -781,17 +779,34 @@ final class GlassCircleButton: NSView {
         button.target = target
         button.action = action
         button.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(button)
+        glass.cornerRadius = 15
+        if #available(macOS 27.0, *) { glass.effectIsInteractive = true }
+        glass.contentView = button
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(glass)
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: 30),
             heightAnchor.constraint(equalToConstant: 30),
-            button.topAnchor.constraint(equalTo: topAnchor),
-            button.bottomAnchor.constraint(equalTo: bottomAnchor),
-            button.leadingAnchor.constraint(equalTo: leadingAnchor),
-            button.trailingAnchor.constraint(equalTo: trailingAnchor),
+            glass.topAnchor.constraint(equalTo: topAnchor),
+            glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+            glass.leadingAnchor.constraint(equalTo: leadingAnchor),
+            glass.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
+}
+
+// Group glass controls into one NSGlassEffectContainerView → a single sampling pass.
+func makeGlassControls(_ circles: [GlassCircleButton], spacing: CGFloat = 6) -> NSView {
+    let row = NSStackView(views: circles)
+    row.orientation = .horizontal
+    row.spacing = spacing
+    row.translatesAutoresizingMaskIntoConstraints = false
+    let container = NSGlassEffectContainerView()
+    container.spacing = spacing + 6
+    container.contentView = row
+    container.translatesAutoresizingMaskIntoConstraints = false
+    return container
 }
 
 // MARK: - Grid tile (skill card — creator avatar background, product-card style)
@@ -821,10 +836,7 @@ final class SkillGridItem: NSCollectionViewItem {
 
         favCircle = GlassCircleButton(symbol: "star", target: self, action: #selector(favClicked))
         menuCircle = GlassCircleButton(symbol: "ellipsis", target: self, action: #selector(menuClicked))
-        let controls = NSStackView(views: [favCircle, menuCircle])
-        controls.orientation = .horizontal
-        controls.spacing = 6
-        controls.translatesAutoresizingMaskIntoConstraints = false
+        let controls = makeGlassControls([favCircle, menuCircle])   // one shared glass sampling pass
         root.addSubview(controls)
 
         nameLabel.font = .systemFont(ofSize: 17, weight: .bold)
