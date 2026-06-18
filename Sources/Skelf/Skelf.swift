@@ -2108,7 +2108,7 @@ final class SkillDetailView: NSView {
     private var paintingPanel: NSPanel?
     @objc private func bannerClicked() {
         guard let skill = skill else { return }
-        let W: CGFloat = 540
+        let W: CGFloat = 1080
         let card = paintingCard(skill, width: W)
         card.layoutSubtreeIfNeeded()
         let h = ceil(card.fittingSize.height)
@@ -2162,10 +2162,11 @@ final class SkillDetailView: NSView {
         let art = SkillArtView()
         art.showScrim = false
         art.translatesAutoresizingMaskIntoConstraints = false
-        var imgH: CGFloat = min(W * 420 / 320, 440)
+        let imgCap: CGFloat = min(540, W * 0.62)
+        var imgH: CGFloat = min(W * 420 / 320, imgCap)
         if let img = ArtStore.shared.cached(skill.id) {
             art.setAvatar(img)
-            if img.size.width > 0 { imgH = min(W * img.size.height / img.size.width, 440) }
+            if img.size.width > 0 { imgH = min(W * img.size.height / img.size.width, imgCap) }
         } else {
             art.setThemedFallback(skill)
         }
@@ -3906,7 +3907,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             host.sceneBridgingOptions = [.title, .toolbars]
             // Create with an explicit frame, THEN attach the content VC, so the window
             // keeps 760×580 instead of collapsing to the content's fitting size.
-            let defaultSize = NSSize(width: 1200, height: 740)   // first-launch default; columns line up here
+            let defaultSize = NSSize(width: 1200, height: 716)   // first-launch default; tuned so the
+                                                                  // SKILL.md card and the sidebar line up
             let w = NSWindow(contentRect: NSRect(origin: .zero, size: defaultSize),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
                              backing: .buffered, defer: false)
