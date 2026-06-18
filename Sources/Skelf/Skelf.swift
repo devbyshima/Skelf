@@ -2131,12 +2131,17 @@ final class SkillDetailView: NSView {
             content = card
         }
 
-        // Liquid-Glass background; the painting is opaque at the top, the info below floats on glass.
+        // Liquid-Glass background; the painting is opaque at the top, the info below floats on
+        // glass. Clip the content to the SAME radius as the glass so the full-bleed painting's
+        // corners follow the rounded panel instead of poking past the curve.
+        let radius: CGFloat = 20
         let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: W, height: panelH))
-        glass.cornerRadius = 20
+        glass.cornerRadius = radius
         glass.autoresizingMask = [.width, .height]
         glass.contentView = content
         content.wantsLayer = true
+        content.layer?.cornerRadius = radius
+        content.layer?.masksToBounds = true
 
         // Borderless (no traffic-light close button); closes on Escape / click-away.
         let panel = PaintingPanel(contentRect: NSRect(x: 0, y: 0, width: W, height: panelH),
