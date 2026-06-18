@@ -54,6 +54,9 @@ jobs:
           name: ${{ github.ref_name }}
           body_path: RELEASE_NOTES.md
           fail_on_unmatched_files: true
+          # SemVer pre-release tags carry a hyphen (e.g. v1.0.0-rc1) — mark those as a
+          # prerelease so they don't become the repo's "Latest release".
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             Skelf.dmg
             SHA256SUMS
