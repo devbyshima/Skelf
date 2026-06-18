@@ -17,6 +17,7 @@ needs **Xcode 26+** for the macOS 26 SDK and SwiftUI's macro plugin.
 open Package.swift              # open in Xcode and Run, or:
 swift build                     # SwiftPM build
 ./build.sh && open Skelf.app    # bundled, ad-hoc-signed Skelf.app (icon + Info.plist)
+./scripts/make-dmg.sh           # a "drag to Applications" Skelf.dmg for sharing
 ```
 
 > `build.sh` produces the real `.app` and locates Xcode's SwiftUI macro plugin for plain
