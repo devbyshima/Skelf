@@ -20,6 +20,7 @@ import SwiftUI
 import Observation
 import QuartzCore
 import CoreServices
+import ServiceManagement
 
 // MARK: - Model
 
@@ -590,7 +591,7 @@ func centerScale(_ layer: CALayer, _ s: CGFloat) -> CATransform3D {
 
 // A springy "pop" — squash to `from`, then overshoot back to rest (12-principles squash & stretch).
 func springPop(_ layer: CALayer?, from: CGFloat = 0.9, damping: CGFloat = 11, stiffness: CGFloat = 320, mass: CGFloat = 0.85) {
-    guard let layer = layer, layer.bounds.width > 1 else { return }
+    guard let layer = layer, layer.bounds.width > 1, !AppSettings.shared.reduceMotion else { return }
     let a = CASpringAnimation(keyPath: "transform")
     a.fromValue = centerScale(layer, from)
     a.toValue = CATransform3DIdentity
@@ -623,6 +624,60 @@ enum Sound {
         s?.currentTime = 0
         s?.play()
     }
+}
+
+// App-wide preferences shown in the Settings window. Each toggle persists to UserDefaults
+// and applies its side effect immediately.
+@Observable
+final class AppSettings {
+    static let shared = AppSettings()
+    private enum Keys { static let menuBarOnly = "menuBarOnly", reduceMotion = "reduceMotion", usePaintings = "usePaintings" }
+
+    private var applyingLogin = false
+    /// Open at login via the modern ServiceManagement API (macOS 13+).
+    var launchAtLogin: Bool {
+        didSet {
+            guard !applyingLogin, launchAtLogin != oldValue else { return }
+            do {
+                if launchAtLogin { try SMAppService.mainApp.register() }
+                else { try SMAppService.mainApp.unregister() }
+            } catch {
+                applyingLogin = true                       // system rejected it → reflect real state
+                launchAtLogin = (SMAppService.mainApp.status == .enabled)
+                applyingLogin = false
+            }
+        }
+    }
+    /// Run from the menu bar with no Dock icon (activation policy .accessory).
+    var menuBarOnly: Bool {
+        didSet { UserDefaults.standard.set(menuBarOnly, forKey: Keys.menuBarOnly); applyMenuBarOnly() }
+    }
+    var playSounds: Bool { didSet { if playSounds != Sound.enabled { Sound.setEnabled(playSounds) } } }
+    /// Honor reduced-motion: skip the spring/pop animations.
+    var reduceMotion: Bool { didSet { UserDefaults.standard.set(reduceMotion, forKey: Keys.reduceMotion) } }
+    /// Show museum paintings on cards (off → the generated themed art only, fully offline).
+    var usePaintings: Bool {
+        didSet {
+            UserDefaults.standard.set(usePaintings, forKey: Keys.usePaintings)
+            NotificationCenter.default.post(name: AppSettings.artChanged, object: nil)
+        }
+    }
+    static let artChanged = Notification.Name("SkelfArtSettingChanged")
+
+    private init() {
+        launchAtLogin = (SMAppService.mainApp.status == .enabled)
+        menuBarOnly = UserDefaults.standard.bool(forKey: Keys.menuBarOnly)
+        playSounds = Sound.enabled
+        reduceMotion = UserDefaults.standard.bool(forKey: Keys.reduceMotion)
+        usePaintings = (UserDefaults.standard.object(forKey: Keys.usePaintings) as? Bool) ?? true
+    }
+
+    func applyMenuBarOnly() {
+        NSApp.setActivationPolicy(menuBarOnly ? .accessory : .regular)
+        if !menuBarOnly { NSApp.activate(ignoringOtherApps: true) }
+    }
+    /// Apply persisted policy once at launch (before the UI shows).
+    func applyOnLaunch() { if menuBarOnly { NSApp.setActivationPolicy(.accessory) } }
 }
 
 // A Liquid Glass card whose corners are concentric with their container (macOS 27).
@@ -805,8 +860,10 @@ final class ArtStore {
         dir.appendingPathComponent(id.replacingOccurrences(of: "/", with: "_") + ".img")
     }
 
-    /// Synchronous cache hit for already-downloaded CC art; nil if not (yet) available.
+    /// Synchronous cache hit for already-downloaded CC art; nil if not (yet) available or if
+    /// the user turned painting covers off (then cards use the generated art).
     func cached(_ id: String) -> NSImage? {
+        guard AppSettings.shared.usePaintings else { return nil }
         if let i = mem[id] { return i }
         if let i = NSImage(contentsOf: diskURL(id)) { mem[id] = i; return i }
         return nil
@@ -836,6 +893,7 @@ final class ArtStore {
     /// bundled curated map it uses that painting; otherwise it searches the Art Institute live
     /// so ANY user's skills get a relevant painting with no setup. Call on main.
     func fetch(_ skill: Skill, completion: @escaping (NSImage?) -> Void) {
+        guard AppSettings.shared.usePaintings else { completion(nil); return }   // generated art only
         let id = skill.id
         if let i = cached(id) { completion(i); return }
         if failed.contains(id) { completion(nil); return }
@@ -2134,7 +2192,7 @@ final class SkillDetailView: NSView {
         art.translatesAutoresizingMaskIntoConstraints = false
         if let img = img { art.setAvatar(img) } else { art.setThemedFallback(skill) }
 
-        let infoColW: CGFloat = portrait ? 480 : 1080
+        let infoColW: CGFloat = portrait ? 480 : 760
         let info = paintingInfo(skill, columnWidth: infoColW)
         info.translatesAutoresizingMaskIntoConstraints = false
         info.layoutSubtreeIfNeeded()
@@ -2164,8 +2222,8 @@ final class SkillDetailView: NSView {
             ])
         } else {
             // image TOP full-bleed, info BELOW
-            W = 1080
-            let imgH = min(W * aspect, 540)
+            W = 760
+            let imgH = min(W * aspect, 440)
             H = imgH + infoH
             NSLayoutConstraint.activate([
                 art.topAnchor.constraint(equalTo: card.topAnchor),
@@ -2927,6 +2985,37 @@ final class SkelfModel {
     }
 }
 
+// The Settings window (opened from the Skelf app menu ⌘, and the menu-bar ⋯ menu).
+struct SettingsView: View {
+    @Bindable var settings: AppSettings
+    var body: some View {
+        Form {
+            Section("General") {
+                row("Launch at Login", "Open Skelf automatically when you sign in.", $settings.launchAtLogin)
+                row("Menu Bar Only", "Run Skelf from the menu bar without a Dock icon.", $settings.menuBarOnly)
+            }
+            Section("Appearance & Feedback") {
+                row("Show Painting Covers", "Use museum paintings on skill cards. Off uses generated art (fully offline).", $settings.usePaintings)
+                row("Reduce Motion", "Turn off the pop and spring animations.", $settings.reduceMotion)
+                row("Play Sounds", "A subtle sound on copy and other actions.", $settings.playSounds)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 500)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    @ViewBuilder private func row(_ title: String, _ subtitle: String, _ binding: Binding<Bool>) -> some View {
+        Toggle(isOn: binding) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.body).fontWeight(.semibold)
+                Text(subtitle).font(.callout).foregroundStyle(.secondary)
+            }
+        }
+        .toggleStyle(.switch)
+        .padding(.vertical, 3)
+    }
+}
+
 struct SkelfRootView: View {
     @Bindable var model: SkelfModel
     var body: some View {
@@ -3282,6 +3371,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     var onOpen: ((Skill) -> Void)?
     var onOpenApp: (() -> Void)?
     var onRefresh: (() -> Void)?
+    var onSettings: (() -> Void)?
     var onUndo: (() -> Void)?
 
     private var currentId: String
@@ -3744,6 +3834,8 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         let refresh = NSMenuItem(title: "Refresh Skills", action: #selector(refreshTapped), keyEquivalent: "r")
         refresh.target = self; menu.addItem(refresh)
         menu.addItem(.separator())
+        let settings = NSMenuItem(title: "Settings…", action: #selector(settingsTapped), keyEquivalent: ",")
+        settings.target = self; menu.addItem(settings)
         let sounds = NSMenuItem(title: "Play Sounds", action: #selector(toggleSounds), keyEquivalent: "")
         sounds.target = self; sounds.state = Sound.enabled ? .on : .off; menu.addItem(sounds)
         menu.addItem(.separator())
@@ -3755,8 +3847,9 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     }
 
     @objc private func refreshTapped() { onRefresh?() }
+    @objc private func settingsTapped() { onSettings?() }
 
-    @objc private func toggleSounds() { Sound.setEnabled(!Sound.enabled) }
+    @objc private func toggleSounds() { Sound.setEnabled(!Sound.enabled); AppSettings.shared.playSounds = Sound.enabled }
 
     @objc private func aboutTapped() {
         let a = NSAlert()
@@ -3778,12 +3871,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     let undoManager = UndoManager()
     var statusItem: NSStatusItem!
     var window: NSWindow?
+    var settingsWindow: NSWindow?
     var model: SkelfModel?
     var watcher: SkillWatcher?
     let popover = NSPopover()
     var popoverController: PopoverListController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppSettings.shared.applyOnLaunch()    // restore Menu-Bar-Only (Dock icon) before the UI shows
         store.reload()
         folders.undoManager = undoManager
         folders.syncInstalled(Set(store.skills.map { $0.id }))
@@ -3799,6 +3894,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         favorites.onChange = { [weak self] in
             self?.model?.bumpFavorites()
             self?.popoverController?.reload()
+        }
+        // Toggling "Show Painting Covers" re-renders the grid + popover with the new art.
+        NotificationCenter.default.addObserver(forName: AppSettings.artChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.model?.bumpReload(); self?.popoverController?.reload()
         }
         popover.delegate = self
         setupStatusItem()
@@ -3834,7 +3933,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         appItem.submenu = appMenu
         appMenu.addItem(withTitle: "About Skelf", action: #selector(showAbout), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide Skelf", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Skelf", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
@@ -3860,6 +3964,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         a.informativeText = "A menu-bar browser for your installed Claude Code skills.\n\n\(store.skills.count) skills installed."
         a.addButton(withTitle: "OK")
         a.runModal()
+    }
+
+    @objc func openSettings() {
+        if settingsWindow == nil {
+            let host = NSHostingController(rootView: SettingsView(settings: AppSettings.shared))
+            let w = NSWindow(contentViewController: host)
+            w.title = "Skelf Settings"
+            w.styleMask = [.titled, .closable]            // standard, non-resizable Settings window
+            w.isReleasedWhenClosed = false
+            w.center()
+            settingsWindow = w
+        }
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func startWatching() {
@@ -3957,6 +4075,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
                 self?.showWindow()
             }
             ctrl.onRefresh = { [weak self] in self?.reloadFromDisk(auto: false) }
+            ctrl.onSettings = { [weak self] in self?.popover.performClose(nil); self?.openSettings() }
             ctrl.onUndo = { [weak self] in self?.undoManager.undo() }
             popoverController = ctrl
         }
