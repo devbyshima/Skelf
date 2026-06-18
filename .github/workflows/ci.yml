@@ -14,6 +14,10 @@ jobs:
   build:
     name: Build (swift build)
     runs-on: macos-15
+    # Skelf needs the macOS 26 SDK (Xcode 26+). Until GitHub-hosted runners ship it, this
+    # job can't compile, so don't let it fail the whole workflow / show the repo as red.
+    # Remove continue-on-error once a macos-26 / Xcode 26 runner image is available.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Select latest Xcode

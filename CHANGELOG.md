@@ -17,6 +17,7 @@ All notable changes to Skelf are documented here. The format is based on
 - Settings window (Launch at Login, Menu Bar Only, Global Shortcut, Appearance, painting
   covers, Refresh Painting Art, Reduce Motion, Play Sounds) and a full macOS menu bar.
 - Live updates via an FSEvents watcher on the skill directories.
+- A minimal Liquid Glass hover tip on cards (name, slash command, creator).
 - CLI modes: `--list`, `--copy`, `--open`, `--popover`.
 
 ### Changed
