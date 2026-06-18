@@ -2616,7 +2616,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         backButton.contentTintColor = .controlAccentColor
         backButton.target = self
         backButton.action = #selector(goBack)
-        backButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+        backButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
         titleLabel.font = .systemFont(ofSize: 15, weight: .bold)
         titleLabel.lineBreakMode = .byTruncatingTail
 
@@ -2629,7 +2629,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         windowButton.target = self
         windowButton.action = #selector(openApp)
         windowButton.translatesAutoresizingMaskIntoConstraints = false
-        windowButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        windowButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
 
         optionsButton.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "Options")
         optionsButton.imagePosition = .imageOnly
@@ -2640,7 +2640,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         optionsButton.target = self
         optionsButton.action = #selector(showOptions)
         optionsButton.translatesAutoresizingMaskIntoConstraints = false
-        optionsButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        optionsButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
 
         // One centered header row: back + title pack left, window + options pack right,
         // all sharing a single vertical centerline (alignment .centerY).
@@ -2680,11 +2680,13 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
             header.topAnchor.constraint(equalTo: root.topAnchor, constant: 18),
             header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            backButton.heightAnchor.constraint(equalToConstant: 22),
-            windowButton.widthAnchor.constraint(equalToConstant: 24),
-            windowButton.heightAnchor.constraint(equalToConstant: 22),
-            optionsButton.widthAnchor.constraint(equalToConstant: 24),
-            optionsButton.heightAnchor.constraint(equalToConstant: 22),
+            titleLabel.heightAnchor.constraint(equalToConstant: 24),
+            backButton.widthAnchor.constraint(equalToConstant: 18),
+            backButton.heightAnchor.constraint(equalToConstant: 24),
+            windowButton.widthAnchor.constraint(equalToConstant: 26),
+            windowButton.heightAnchor.constraint(equalToConstant: 24),
+            optionsButton.widthAnchor.constraint(equalToConstant: 26),
+            optionsButton.heightAnchor.constraint(equalToConstant: 24),
 
             searchField.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 14),
             searchField.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
