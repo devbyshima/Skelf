@@ -596,6 +596,7 @@ final class SkillArtView: NSView {
     private let mono = CATextLayer()
     private let scrim = CAGradientLayer()
     var showSubject = true { didSet { mono.isHidden = !showSubject } }
+    var showScrim = true { didSet { scrim.isHidden = !showScrim } }
     var subjectFraction: CGFloat = 0.62   // monogram size relative to the smaller edge
 
     override init(frame frameRect: NSRect) {
@@ -992,6 +993,64 @@ final class MetaCardView: NSView {
 
 // MARK: - Detail screen
 
+// Split a SKILL.md into its YAML-ish frontmatter rows and the markdown body.
+func splitFrontmatter(_ text: String) -> (rows: [(String, String)], body: String) {
+    let lines = text.components(separatedBy: "\n")
+    guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return ([], text) }
+    var i = 1
+    var rows: [(String, String)] = []
+    while i < lines.count, lines[i].trimmingCharacters(in: .whitespaces) != "---" {
+        let line = lines[i]
+        if !line.hasPrefix(" "), !line.hasPrefix("\t"), let c = line.firstIndex(of: ":") {
+            let k = String(line[..<c]).trimmingCharacters(in: .whitespaces)
+            var v = String(line[line.index(after: c)...]).trimmingCharacters(in: .whitespaces)
+            if v == "|" || v == ">" { v = "" }
+            if (v.hasPrefix("\"") && v.hasSuffix("\"")) || (v.hasPrefix("'") && v.hasSuffix("'")), v.count >= 2 {
+                v = String(v.dropFirst().dropLast())
+            }
+            rows.append((k, v))
+        }
+        i += 1
+    }
+    let body = i + 1 < lines.count ? lines[(i + 1)...].joined(separator: "\n") : ""
+    return (rows, body)
+}
+
+private func mdInlineClean(_ s: String) -> String {
+    s.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
+}
+
+// A small, predictable markdown renderer for the read-only SKILL.md body: headings,
+// bullets and paragraphs (inline emphasis markers are stripped for a clean read).
+func renderSkillMarkdown(_ md: String) -> NSAttributedString {
+    let out = NSMutableAttributedString()
+    func emit(_ s: String, _ font: NSFont, _ color: NSColor = .labelColor, before: CGFloat = 0, lead: CGFloat = 0) {
+        let p = NSMutableParagraphStyle()
+        p.lineSpacing = 3; p.paragraphSpacing = 5; p.paragraphSpacingBefore = before
+        p.firstLineHeadIndent = lead; p.headIndent = lead
+        out.append(NSAttributedString(string: s + "\n", attributes: [.font: font, .foregroundColor: color, .paragraphStyle: p]))
+    }
+    var inFence = false
+    for raw in md.components(separatedBy: "\n") {
+        let t = raw.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("```") { inFence.toggle(); continue }
+        if inFence { emit(raw, .monospacedSystemFont(ofSize: 12, weight: .regular), .secondaryLabelColor, lead: 6); continue }
+        if t.isEmpty { out.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 5)])); continue }
+        if t.hasPrefix("### ") { emit(mdInlineClean(String(t.dropFirst(4))), .systemFont(ofSize: 14, weight: .semibold), before: 8) }
+        else if t.hasPrefix("## ") { emit(mdInlineClean(String(t.dropFirst(3))), .systemFont(ofSize: 16, weight: .bold), before: 12) }
+        else if t.hasPrefix("# ") { emit(mdInlineClean(String(t.dropFirst(2))), .systemFont(ofSize: 19, weight: .bold), before: 12) }
+        else if t.hasPrefix("- ") || t.hasPrefix("* ") { emit("•  " + mdInlineClean(String(t.dropFirst(2))), .systemFont(ofSize: 13), .labelColor, lead: 14) }
+        else if let r = t.range(of: #"^\d+\.\s"#, options: .regularExpression) {
+            emit(mdInlineClean(String(t)), .systemFont(ofSize: 13), .labelColor, lead: 14)
+            _ = r
+        }
+        else { emit(mdInlineClean(t), .systemFont(ofSize: 13)) }
+    }
+    return out
+}
+
+// MARK: - Detail screen (two-column: scrollable SKILL.md + sticky sidebar, image header)
+
 final class SkillDetailView: NSView {
     var onBack: (() -> Void)?
     var onCopy: ((Skill) -> Void)?
@@ -999,27 +1058,25 @@ final class SkillDetailView: NSView {
     var onOrganize: ((Skill, NSView) -> Void)?
     private var skill: Skill?
 
-    // Navigation chrome — collapsed when hosted inside a SwiftUI NavigationStack.
+    // nav chrome (collapsed when hosted in the SwiftUI NavigationStack)
     private let backBar = NSView()
     private let topDivider = NSBox()
     private var backBarHeight: NSLayoutConstraint!
 
-    // hero
-    private let glyph = GradientView()
-    private let initialsLabel = NSTextField(labelWithString: "")
-    private let nameLabel = NSTextField(labelWithString: "")
-    private let initiatorBox = NSView()
-    private let initiatorLabel = NSTextField(labelWithString: "")
-    private let statusBox = NSView()
-    private let statusLabel = NSTextField(labelWithString: "")
+    // header banner
+    private let banner = SkillArtView()
+    private let bannerName = NSTextField(labelWithString: "")
+    private let bannerPillBox = NSView()
+    private let bannerPillLabel = NSTextField(labelWithString: "")
+    private let bannerStatus = NSTextField(labelWithString: "")
 
-    // primary action
-    private let copyButton = NSButton()
-    private let copyGlass = NSGlassEffectView()
+    // left column (scrollable SKILL.md)
+    private let leftContent = NSStackView()
+    private let fmTable = NSStackView()
+    private let bodyLabel = NSTextField(wrappingLabelWithString: "")
 
-    // meta bento + description
-    private let metaColumn = NSStackView()
-    private let descLabel = NSTextField(wrappingLabelWithString: "")
+    // right sidebar (sticky)
+    private let sidebarStack = NSStackView()
     private var copiedWork: DispatchWorkItem?
 
     override init(frame frameRect: NSRect) {
@@ -1029,191 +1086,100 @@ final class SkillDetailView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Hide the in-view back bar (used when a SwiftUI toolbar provides the back chevron).
     func setShowsBackBar(_ show: Bool) {
         backBar.isHidden = !show
         topDivider.isHidden = !show
         backBarHeight.constant = show ? 40 : 0
     }
 
-    private func styleLinkButton(_ b: NSButton, _ title: String, _ symbol: String) {
-        b.title = title
-        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
-        b.imagePosition = .imageLeading
-        b.bezelStyle = .rounded
-        b.controlSize = .small
-        b.translatesAutoresizingMaskIntoConstraints = false
-    }
-
-    private func iconButton(_ symbol: String, _ action: Selector) -> NSButton {
-        let b = NSButton()
-        b.isBordered = false
-        b.bezelStyle = .regularSquare
-        b.imageScaling = .scaleProportionallyDown
-        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        b.contentTintColor = .secondaryLabelColor
-        b.focusRingType = .none
-        b.target = self
-        b.action = action
-        b.translatesAutoresizingMaskIntoConstraints = false
-        b.widthAnchor.constraint(equalToConstant: 26).isActive = true
-        b.heightAnchor.constraint(equalToConstant: 26).isActive = true
-        return b
-    }
-
-    private func capsule(_ box: NSView, _ label: NSTextField, font: NSFont) {
-        box.wantsLayer = true
-        box.layer?.cornerRadius = 9
-        box.translatesAutoresizingMaskIntoConstraints = false
-        label.font = font
-        label.drawsBackground = false
-        label.alignment = .center
-        label.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 9),
-            label.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -9),
-            label.topAnchor.constraint(equalTo: box.topAnchor, constant: 3),
-            label.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -3),
-        ])
-    }
-
     private func build() {
-        // --- nav chrome (back bar) ---
+        // --- back bar ---
         backBar.translatesAutoresizingMaskIntoConstraints = false
         addSubview(backBar)
         let back = NSButton(title: "All skills", target: self, action: #selector(backTapped))
         back.image = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Back")
         back.imagePosition = .imageLeading
-        back.bezelStyle = .recessed
-        back.isBordered = false
+        back.bezelStyle = .recessed; back.isBordered = false
         back.contentTintColor = .controlAccentColor
         back.font = skelfFont(.callout, .medium)
         back.translatesAutoresizingMaskIntoConstraints = false
         backBar.addSubview(back)
-
         topDivider.boxType = .separator
         topDivider.translatesAutoresizingMaskIntoConstraints = false
         addSubview(topDivider)
 
-        // --- scroll area + content stack ---
-        let scroll = NSScrollView()
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.hasVerticalScroller = true
-        scroll.drawsBackground = false
-        scroll.borderType = .noBorder
-        addSubview(scroll)
-        let clip = scroll.contentView
-        let doc = FlippedView()
-        doc.translatesAutoresizingMaskIntoConstraints = false
-        scroll.documentView = doc
+        // --- header banner ---
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        banner.subjectFraction = 0.7
+        addSubview(banner)
+        bannerName.font = .systemFont(ofSize: 24, weight: .bold)
+        bannerName.textColor = .white
+        bannerName.lineBreakMode = .byTruncatingTail
+        bannerName.translatesAutoresizingMaskIntoConstraints = false
+        banner.addSubview(bannerName)
+        bannerPillBox.wantsLayer = true
+        bannerPillBox.layer?.cornerRadius = 11
+        bannerPillBox.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.45).cgColor
+        bannerPillBox.translatesAutoresizingMaskIntoConstraints = false
+        bannerPillLabel.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
+        bannerPillLabel.textColor = .white
+        bannerPillLabel.translatesAutoresizingMaskIntoConstraints = false
+        bannerPillBox.addSubview(bannerPillLabel)
+        banner.addSubview(bannerPillBox)
+        bannerStatus.font = .systemFont(ofSize: 12, weight: .semibold)
+        bannerStatus.textColor = NSColor.white.withAlphaComponent(0.9)
+        bannerStatus.translatesAutoresizingMaskIntoConstraints = false
+        banner.addSubview(bannerStatus)
 
-        let content = NSStackView()
-        content.orientation = .vertical
-        content.alignment = .leading
-        content.spacing = 18
-        content.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(content)
+        // --- body row: left scroll + sidebar scroll ---
+        let bodyRow = NSView()
+        bodyRow.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(bodyRow)
 
-        // hero block
-        glyph.translatesAutoresizingMaskIntoConstraints = false
-        glyph.gradient.cornerRadius = 16
-        initialsLabel.font = skelfFont(.title1, .bold)
-        initialsLabel.textColor = .white
-        initialsLabel.alignment = .center
-        initialsLabel.translatesAutoresizingMaskIntoConstraints = false
-        glyph.addSubview(initialsLabel)
+        let leftScroll = NSScrollView()
+        leftScroll.translatesAutoresizingMaskIntoConstraints = false
+        leftScroll.hasVerticalScroller = true
+        leftScroll.drawsBackground = false
+        leftScroll.borderType = .noBorder
+        bodyRow.addSubview(leftScroll)
+        let leftClip = leftScroll.contentView
+        let leftDoc = FlippedView()
+        leftDoc.translatesAutoresizingMaskIntoConstraints = false
+        leftScroll.documentView = leftDoc
+        leftContent.orientation = .vertical
+        leftContent.alignment = .leading
+        leftContent.spacing = 16
+        leftContent.translatesAutoresizingMaskIntoConstraints = false
+        leftDoc.addSubview(leftContent)
 
-        nameLabel.font = skelfFont(.title2, .bold)
-        nameLabel.lineBreakMode = .byTruncatingTail
-        nameLabel.maximumNumberOfLines = 2
-        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        let sidebarScroll = NSScrollView()
+        sidebarScroll.translatesAutoresizingMaskIntoConstraints = false
+        sidebarScroll.hasVerticalScroller = true
+        sidebarScroll.autohidesScrollers = true
+        sidebarScroll.scrollerStyle = .overlay
+        sidebarScroll.drawsBackground = false
+        sidebarScroll.borderType = .noBorder
+        bodyRow.addSubview(sidebarScroll)
+        let sideClip = sidebarScroll.contentView
+        let sideDoc = FlippedView()
+        sideDoc.translatesAutoresizingMaskIntoConstraints = false
+        sidebarScroll.documentView = sideDoc
+        sidebarStack.orientation = .vertical
+        sidebarStack.alignment = .leading
+        sidebarStack.spacing = 14
+        sidebarStack.translatesAutoresizingMaskIntoConstraints = false
+        sideDoc.addSubview(sidebarStack)
 
-        capsule(initiatorBox, initiatorLabel, font: skelfMono(.callout, .medium))
-        initiatorBox.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.14).cgColor
-        initiatorLabel.textColor = .controlAccentColor
-        capsule(statusBox, statusLabel, font: skelfFont(.caption1, .semibold))
-
-        let chipRow = NSStackView(views: [initiatorBox, statusBox])
-        chipRow.orientation = .horizontal
-        chipRow.spacing = 8
-        chipRow.alignment = .centerY
-        chipRow.translatesAutoresizingMaskIntoConstraints = false
-
-        let heroText = NSStackView(views: [nameLabel, chipRow])
-        heroText.orientation = .vertical
-        heroText.alignment = .leading
-        heroText.spacing = 8
-        heroText.translatesAutoresizingMaskIntoConstraints = false
-
-        let favBtn = iconButton("star", #selector(favoriteTapped))
-        favoriteButtonRef = favBtn
-        let folderBtn = iconButton("folder.badge.plus", #selector(organizeTapped))
-        folderButtonRef = folderBtn
-        let heroActions = NSStackView(views: [favBtn, folderBtn])
-        heroActions.orientation = .horizontal
-        heroActions.spacing = 2
-        heroActions.translatesAutoresizingMaskIntoConstraints = false
-
-        let hero = NSView()
-        hero.translatesAutoresizingMaskIntoConstraints = false
-        hero.addSubview(glyph); hero.addSubview(heroText); hero.addSubview(heroActions)
-        content.addArrangedSubview(hero)
-
-        // primary action — Liquid Glass Copy pill
-        copyButton.isBordered = false
-        copyButton.bezelStyle = .rounded
-        copyButton.controlSize = .large
-        copyButton.keyEquivalent = "\r"
-        copyButton.font = skelfFont(.headline, .semibold)
-        copyButton.contentTintColor = .white
-        copyButton.target = self
-        copyButton.action = #selector(copyTapped)
-        copyButton.translatesAutoresizingMaskIntoConstraints = false
-        copyGlass.cornerRadius = 22
-        copyGlass.tintColor = .controlAccentColor
-        copyGlass.contentView = copyButton
-        copyGlass.translatesAutoresizingMaskIntoConstraints = false
-        if #available(macOS 27.0, *) { copyGlass.effectIsInteractive = true }
-        content.addArrangedSubview(copyGlass)
-
-        // meta bento
-        metaColumn.orientation = .vertical
-        metaColumn.alignment = .leading
-        metaColumn.distribution = .fill
-        metaColumn.spacing = 12
-        metaColumn.translatesAutoresizingMaskIntoConstraints = false
-        content.addArrangedSubview(metaColumn)
-
-        // description
-        let descBlock = NSView()
-        descBlock.translatesAutoresizingMaskIntoConstraints = false
-        let descHeader = NSTextField(labelWithString: "DESCRIPTION")
-        descHeader.font = skelfFont(.caption2, .semibold)
-        descHeader.textColor = .tertiaryLabelColor
-        descHeader.translatesAutoresizingMaskIntoConstraints = false
-        descBlock.addSubview(descHeader)
-        descLabel.font = skelfFont(.body)
-        descLabel.textColor = .labelColor
-        descLabel.translatesAutoresizingMaskIntoConstraints = false
-        descBlock.addSubview(descLabel)
-        content.addArrangedSubview(descBlock)
-
-        // secondary actions
-        let revealBtn = NSButton(title: "Reveal SKILL.md", target: self, action: #selector(revealTapped))
-        styleLinkButton(revealBtn, "Reveal SKILL.md", "doc.text")
-        let githubBtn = NSButton(title: "View on GitHub", target: self, action: #selector(githubTapped))
-        styleLinkButton(githubBtn, "View on GitHub", "arrow.up.right.square")
-        let links = NSStackView(views: [revealBtn, githubBtn])
-        links.orientation = .horizontal
-        links.spacing = 8
-        links.translatesAutoresizingMaskIntoConstraints = false
-        content.addArrangedSubview(links)
-
-        content.setCustomSpacing(22, after: hero)
-        content.setCustomSpacing(24, after: copyGlass)
-        content.setCustomSpacing(24, after: metaColumn)
-        content.setCustomSpacing(20, after: descBlock)
+        // SKILL.md card holds the frontmatter table; the body label follows it.
+        fmTable.orientation = .vertical
+        fmTable.alignment = .leading
+        fmTable.spacing = 0
+        fmTable.translatesAutoresizingMaskIntoConstraints = false
+        let mdCard = card(headerLeft: "SKILL.md", headerRight: "read only", body: fmTable)
+        leftContent.addArrangedSubview(mdCard)
+        bodyLabel.isSelectable = true
+        bodyLabel.translatesAutoresizingMaskIntoConstraints = false
+        leftContent.addArrangedSubview(bodyLabel)
 
         backBarHeight = backBar.heightAnchor.constraint(equalToConstant: 40)
         NSLayoutConstraint.activate([
@@ -1223,147 +1189,333 @@ final class SkillDetailView: NSView {
             backBarHeight,
             back.leadingAnchor.constraint(equalTo: backBar.leadingAnchor, constant: 12),
             back.centerYAnchor.constraint(equalTo: backBar.centerYAnchor),
-
             topDivider.topAnchor.constraint(equalTo: backBar.bottomAnchor),
             topDivider.leadingAnchor.constraint(equalTo: leadingAnchor),
             topDivider.trailingAnchor.constraint(equalTo: trailingAnchor),
 
-            scroll.topAnchor.constraint(equalTo: topDivider.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            banner.topAnchor.constraint(equalTo: topDivider.bottomAnchor),
+            banner.leadingAnchor.constraint(equalTo: leadingAnchor),
+            banner.trailingAnchor.constraint(equalTo: trailingAnchor),
+            banner.heightAnchor.constraint(equalToConstant: 150),
+            bannerName.leadingAnchor.constraint(equalTo: banner.leadingAnchor, constant: 24),
+            bannerName.bottomAnchor.constraint(equalTo: banner.bottomAnchor, constant: -18),
+            bannerName.trailingAnchor.constraint(lessThanOrEqualTo: bannerPillBox.leadingAnchor, constant: -10),
+            bannerPillBox.trailingAnchor.constraint(equalTo: banner.trailingAnchor, constant: -24),
+            bannerPillBox.centerYAnchor.constraint(equalTo: bannerName.centerYAnchor),
+            bannerPillBox.heightAnchor.constraint(equalToConstant: 24),
+            bannerPillLabel.leadingAnchor.constraint(equalTo: bannerPillBox.leadingAnchor, constant: 10),
+            bannerPillLabel.trailingAnchor.constraint(equalTo: bannerPillBox.trailingAnchor, constant: -10),
+            bannerPillLabel.centerYAnchor.constraint(equalTo: bannerPillBox.centerYAnchor),
+            bannerStatus.leadingAnchor.constraint(equalTo: banner.leadingAnchor, constant: 24),
+            bannerStatus.bottomAnchor.constraint(equalTo: bannerName.topAnchor, constant: -4),
 
-            doc.topAnchor.constraint(equalTo: clip.topAnchor),
-            doc.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
-            doc.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
-            doc.widthAnchor.constraint(equalTo: clip.widthAnchor),
+            bodyRow.topAnchor.constraint(equalTo: banner.bottomAnchor),
+            bodyRow.leadingAnchor.constraint(equalTo: leadingAnchor),
+            bodyRow.trailingAnchor.constraint(equalTo: trailingAnchor),
+            bodyRow.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            content.topAnchor.constraint(equalTo: doc.topAnchor, constant: 24),
-            content.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 24),
-            content.trailingAnchor.constraint(equalTo: doc.trailingAnchor, constant: -24),
-            content.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -24),
+            leftScroll.topAnchor.constraint(equalTo: bodyRow.topAnchor),
+            leftScroll.leadingAnchor.constraint(equalTo: bodyRow.leadingAnchor),
+            leftScroll.bottomAnchor.constraint(equalTo: bodyRow.bottomAnchor),
+            leftScroll.trailingAnchor.constraint(equalTo: sidebarScroll.leadingAnchor),
+            leftDoc.topAnchor.constraint(equalTo: leftClip.topAnchor),
+            leftDoc.leadingAnchor.constraint(equalTo: leftClip.leadingAnchor),
+            leftDoc.trailingAnchor.constraint(equalTo: leftClip.trailingAnchor),
+            leftDoc.widthAnchor.constraint(equalTo: leftClip.widthAnchor),
+            leftContent.topAnchor.constraint(equalTo: leftDoc.topAnchor, constant: 20),
+            leftContent.leadingAnchor.constraint(equalTo: leftDoc.leadingAnchor, constant: 24),
+            leftContent.trailingAnchor.constraint(equalTo: leftDoc.trailingAnchor, constant: -20),
+            leftContent.bottomAnchor.constraint(equalTo: leftDoc.bottomAnchor, constant: -24),
+            mdCard.widthAnchor.constraint(equalTo: leftContent.widthAnchor),
+            bodyLabel.widthAnchor.constraint(equalTo: leftContent.widthAnchor),
 
-            // hero internal layout
-            hero.widthAnchor.constraint(equalTo: content.widthAnchor),
-            glyph.topAnchor.constraint(equalTo: hero.topAnchor),
-            glyph.leadingAnchor.constraint(equalTo: hero.leadingAnchor),
-            glyph.widthAnchor.constraint(equalToConstant: 64),
-            glyph.heightAnchor.constraint(equalToConstant: 64),
-            hero.bottomAnchor.constraint(greaterThanOrEqualTo: glyph.bottomAnchor),
-            initialsLabel.centerXAnchor.constraint(equalTo: glyph.centerXAnchor),
-            initialsLabel.centerYAnchor.constraint(equalTo: glyph.centerYAnchor),
-            heroActions.topAnchor.constraint(equalTo: hero.topAnchor, constant: 2),
-            heroActions.trailingAnchor.constraint(equalTo: hero.trailingAnchor),
-            heroText.topAnchor.constraint(equalTo: glyph.topAnchor),
-            heroText.leadingAnchor.constraint(equalTo: glyph.trailingAnchor, constant: 16),
-            heroText.trailingAnchor.constraint(lessThanOrEqualTo: heroActions.leadingAnchor, constant: -12),
-            hero.bottomAnchor.constraint(greaterThanOrEqualTo: heroText.bottomAnchor),
-            statusBox.heightAnchor.constraint(equalToConstant: 20),
-            initiatorBox.heightAnchor.constraint(equalToConstant: 20),
-
-            // primary action
-            copyGlass.heightAnchor.constraint(equalToConstant: 44),
-            copyGlass.widthAnchor.constraint(greaterThanOrEqualToConstant: 240),
-            copyGlass.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor),
-
-            // meta + description span the content width
-            metaColumn.widthAnchor.constraint(equalTo: content.widthAnchor),
-            descBlock.widthAnchor.constraint(equalTo: content.widthAnchor),
-            descHeader.topAnchor.constraint(equalTo: descBlock.topAnchor),
-            descHeader.leadingAnchor.constraint(equalTo: descBlock.leadingAnchor),
-            descLabel.topAnchor.constraint(equalTo: descHeader.bottomAnchor, constant: 8),
-            descLabel.leadingAnchor.constraint(equalTo: descBlock.leadingAnchor),
-            descLabel.trailingAnchor.constraint(lessThanOrEqualTo: descBlock.trailingAnchor),
-            descLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 640),
-            descLabel.bottomAnchor.constraint(equalTo: descBlock.bottomAnchor),
+            sidebarScroll.topAnchor.constraint(equalTo: bodyRow.topAnchor),
+            sidebarScroll.bottomAnchor.constraint(equalTo: bodyRow.bottomAnchor),
+            sidebarScroll.trailingAnchor.constraint(equalTo: bodyRow.trailingAnchor),
+            sidebarScroll.widthAnchor.constraint(equalToConstant: 300),
+            sideDoc.topAnchor.constraint(equalTo: sideClip.topAnchor),
+            sideDoc.leadingAnchor.constraint(equalTo: sideClip.leadingAnchor),
+            sideDoc.trailingAnchor.constraint(equalTo: sideClip.trailingAnchor),
+            sideDoc.widthAnchor.constraint(equalTo: sideClip.widthAnchor),
+            sidebarStack.topAnchor.constraint(equalTo: sideDoc.topAnchor, constant: 20),
+            sidebarStack.leadingAnchor.constraint(equalTo: sideDoc.leadingAnchor, constant: 4),
+            sidebarStack.trailingAnchor.constraint(equalTo: sideDoc.trailingAnchor, constant: -20),
+            sidebarStack.bottomAnchor.constraint(lessThanOrEqualTo: sideDoc.bottomAnchor, constant: -24),
         ])
     }
 
-    private weak var favoriteButtonRef: NSButton?
-    private weak var folderButtonRef: NSButton?
+    // --- card + row builders ---
+    private func card(headerLeft: String?, headerRight: String? = nil, body: NSView) -> NSView {
+        let c = NSView()
+        c.wantsLayer = true
+        c.layer?.cornerRadius = 12
+        c.layer?.borderWidth = 1
+        c.layer?.borderColor = NSColor.separatorColor.cgColor
+        c.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        c.translatesAutoresizingMaskIntoConstraints = false
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        if let headerLeft = headerLeft {
+            let h = NSTextField(labelWithString: headerLeft)
+            h.font = skelfFont(.caption2, .semibold)
+            h.textColor = .secondaryLabelColor
+            h.translatesAutoresizingMaskIntoConstraints = false
+            if let hr = headerRight {
+                let r = NSTextField(labelWithString: hr.uppercased())
+                r.font = skelfFont(.caption2, .semibold)
+                r.textColor = .tertiaryLabelColor
+                r.translatesAutoresizingMaskIntoConstraints = false
+                let row = NSStackView(views: [h, NSView(), r])
+                row.orientation = .horizontal
+                row.distribution = .fill
+                row.translatesAutoresizingMaskIntoConstraints = false
+                stack.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+            } else {
+                stack.addArrangedSubview(h)
+            }
+        }
+        body.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(body)
+        body.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        c.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: c.topAnchor, constant: 14),
+            stack.bottomAnchor.constraint(equalTo: c.bottomAnchor, constant: -14),
+            stack.leadingAnchor.constraint(equalTo: c.leadingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(equalTo: c.trailingAnchor, constant: -14),
+        ])
+        return c
+    }
 
-    // A bento row of equal-width cards (one card = full width).
-    private func metaRow(_ cards: [NSView]) -> NSView {
-        let row = NSStackView(views: cards)
+    private func fmRow(_ key: String, _ value: String) -> NSView {
+        let k = NSTextField(labelWithString: key)
+        k.font = skelfFont(.caption1, .semibold)
+        k.textColor = .systemRed
+        k.alignment = .left
+        k.translatesAutoresizingMaskIntoConstraints = false
+        k.widthAnchor.constraint(equalToConstant: 92).isActive = true
+        k.setContentHuggingPriority(.required, for: .horizontal)
+        let v = NSTextField(wrappingLabelWithString: value)
+        v.font = skelfFont(.callout)
+        v.textColor = .labelColor
+        v.isSelectable = true
+        v.translatesAutoresizingMaskIntoConstraints = false
+        let row = NSStackView(views: [k, v])
         row.orientation = .horizontal
-        row.distribution = cards.count > 1 ? .fillEqually : .fill
         row.alignment = .top
         row.spacing = 12
+        row.edgeInsets = NSEdgeInsets(top: 10, left: 0, bottom: 10, right: 0)
         row.translatesAutoresizingMaskIntoConstraints = false
         return row
     }
 
+    private func metaRow(_ key: String, _ value: String) -> NSView {
+        let k = NSTextField(labelWithString: key.uppercased())
+        k.font = skelfFont(.caption2, .semibold); k.textColor = .tertiaryLabelColor
+        k.translatesAutoresizingMaskIntoConstraints = false
+        k.widthAnchor.constraint(equalToConstant: 78).isActive = true
+        let v = NSTextField(labelWithString: value)
+        v.font = skelfFont(.callout); v.textColor = .labelColor
+        v.lineBreakMode = .byTruncatingMiddle
+        v.isSelectable = true
+        v.translatesAutoresizingMaskIntoConstraints = false
+        let row = NSStackView(views: [k, v])
+        row.orientation = .horizontal; row.alignment = .firstBaseline; row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        return row
+    }
+
+    private func sidebarButton(_ title: String, _ symbol: String, _ action: Selector, prominent: Bool = false) -> NSButton {
+        let b = NSButton(title: " " + title, target: self, action: action)
+        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        b.imagePosition = .imageLeading
+        b.bezelStyle = .rounded
+        b.controlSize = .large
+        b.translatesAutoresizingMaskIntoConstraints = false
+        if prominent { b.keyEquivalent = "\r" }
+        return b
+    }
+
+    private func monoChip(_ text: String, _ action: Selector) -> NSView {
+        let box = NSView()
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 8
+        box.layer?.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.6).cgColor
+        box.layer?.borderWidth = 1
+        box.layer?.borderColor = NSColor.separatorColor.cgColor
+        box.translatesAutoresizingMaskIntoConstraints = false
+        let label = NSTextField(labelWithString: text)
+        label.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        label.textColor = .labelColor
+        label.lineBreakMode = .byTruncatingTail
+        label.isSelectable = true
+        label.translatesAutoresizingMaskIntoConstraints = false
+        let copy = NSButton(image: NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy")!, target: self, action: action)
+        copy.isBordered = false
+        copy.contentTintColor = .secondaryLabelColor
+        copy.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(label); box.addSubview(copy)
+        NSLayoutConstraint.activate([
+            box.heightAnchor.constraint(equalToConstant: 34),
+            label.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 10),
+            label.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: copy.leadingAnchor, constant: -6),
+            copy.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -8),
+            copy.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+        ])
+        return box
+    }
+
     func configure(_ skill: Skill, isFavorite: Bool) {
         self.skill = skill
-        initialsLabel.stringValue = Palette.initials(skill.name)
-        nameLabel.stringValue = skill.name
-        glyph.gradient.colors = Palette.gradientColors(skill.name)
+        banner.configure(skill.name, enabled: skill.enabled)
+        bannerName.stringValue = skill.name
+        bannerPillLabel.stringValue = skill.initiator
+        bannerStatus.stringValue = skill.enabled ? "● Enabled" : "○ Installed · off"
+        bannerStatus.textColor = skill.enabled ? NSColor.systemGreen : NSColor.white.withAlphaComponent(0.8)
 
-        initiatorLabel.stringValue = skill.initiator
-        statusLabel.stringValue = skill.enabled ? "● Enabled" : "○ Off"
-        statusLabel.textColor = skill.enabled ? .systemGreen : .secondaryLabelColor
-        statusBox.layer?.backgroundColor = (skill.enabled ? NSColor.systemGreen : NSColor.systemGray)
-            .withAlphaComponent(0.16).cgColor
+        // read the file for the frontmatter table + body
+        let raw = (try? String(contentsOfFile: skill.skillMDPath, encoding: .utf8)) ?? ""
+        let (rows, body) = splitFrontmatter(raw)
 
-        favoriteButtonRef?.image = NSImage(systemSymbolName: isFavorite ? "star.fill" : "star",
-                                           accessibilityDescription: isFavorite ? "Favorited" : "Favorite")
-        favoriteButtonRef?.contentTintColor = isFavorite ? .systemYellow : .secondaryLabelColor
-        favoriteButtonRef?.toolTip = isFavorite ? "Unpin from favorites" : "Pin to favorites"
-        folderButtonRef?.toolTip = "Add to a folder…"
-
-        copyButton.title = "Copy  \(skill.initiator)"
-
-        metaColumn.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let version = MetaCardView(key: "Version", value: skill.version ?? "unversioned", mono: false)
-        let category = MetaCardView(key: "Category", value: skill.category, mono: false)
-        let files = MetaCardView(key: "Files", value: "\(skill.fileCount)", mono: false)
-        let installed = MetaCardView(key: "Installed", value: skill.installedAt, mono: false)
-        let source = MetaCardView(key: "Source", value: skill.source, mono: false)
-        let path = MetaCardView(key: "Path", value: skill.skillPath, mono: true)
-        metaColumn.addArrangedSubview(metaRow([version, category]))
-        metaColumn.addArrangedSubview(metaRow([files, installed]))
-        metaColumn.addArrangedSubview(metaRow([source]))
-        metaColumn.addArrangedSubview(metaRow([path]))
-        for row in metaColumn.arrangedSubviews {
-            row.widthAnchor.constraint(equalTo: metaColumn.widthAnchor).isActive = true
+        fmTable.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let wanted = ["name", "description", "version", "license"]
+        var shown = 0
+        for key in wanted {
+            if let pair = rows.first(where: { $0.0 == key }), !pair.1.isEmpty {
+                if shown > 0 { fmTable.addArrangedSubview(hairline()) }
+                let r = fmRow(key, pair.1); fmTable.addArrangedSubview(r)
+                r.widthAnchor.constraint(equalTo: fmTable.widthAnchor).isActive = true
+                shown += 1
+            }
+        }
+        if shown == 0 {
+            let r = fmRow("name", skill.name); fmTable.addArrangedSubview(r)
+            r.widthAnchor.constraint(equalTo: fmTable.widthAnchor).isActive = true
+            fmTable.addArrangedSubview(hairline())
+            let d = fmRow("description", skill.description); fmTable.addArrangedSubview(d)
+            d.widthAnchor.constraint(equalTo: fmTable.widthAnchor).isActive = true
         }
 
-        descLabel.stringValue = skill.description.isEmpty ? "No description in SKILL.md." : skill.description
+        let bodyText = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        bodyLabel.attributedStringValue = bodyText.isEmpty
+            ? NSAttributedString(string: "This skill's SKILL.md has no content beyond its frontmatter.",
+                                 attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor])
+            : renderSkillMarkdown(bodyText)
+
+        rebuildSidebar(skill, isFavorite: isFavorite)
+    }
+
+    private func hairline() -> NSView {
+        let v = NSBox(); v.boxType = .separator
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        return v
+    }
+
+    private func rebuildSidebar(_ skill: Skill, isFavorite: Bool) {
+        sidebarStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let creator = FolderStore.creatorName(skill.source)
+
+        // Source card
+        let avatar = SkillArtView(); avatar.translatesAutoresizingMaskIntoConstraints = false
+        avatar.layer?.cornerRadius = 8; avatar.subjectFraction = 0.7; avatar.showScrim = false
+        avatar.configure(creator)
+        avatar.widthAnchor.constraint(equalToConstant: 34).isActive = true
+        avatar.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        let creatorName = NSTextField(labelWithString: creator)
+        creatorName.font = skelfFont(.callout, .semibold)
+        let repoName = NSTextField(labelWithString: skill.source)
+        repoName.font = skelfFont(.caption1); repoName.textColor = .secondaryLabelColor
+        repoName.lineBreakMode = .byTruncatingMiddle
+        let nameCol = NSStackView(views: [creatorName, repoName])
+        nameCol.orientation = .vertical; nameCol.alignment = .leading; nameCol.spacing = 1
+        let idRow = NSStackView(views: [avatar, nameCol])
+        idRow.orientation = .horizontal; idRow.alignment = .centerY; idRow.spacing = 10
+        idRow.translatesAutoresizingMaskIntoConstraints = false
+        let ghBtn = sidebarButton("View on GitHub", "arrow.up.right.square", #selector(githubTapped))
+        let crBtn = sidebarButton("Creator's Repositories", "person.crop.square.badge.camera", #selector(creatorTapped))
+        ghBtn.isEnabled = skill.githubURL != nil
+        crBtn.isEnabled = skill.source.contains("/")
+        let srcStack = NSStackView(views: [idRow, ghBtn, crBtn])
+        srcStack.orientation = .vertical; srcStack.alignment = .leading; srcStack.spacing = 8
+        srcStack.translatesAutoresizingMaskIntoConstraints = false
+        let srcCard = card(headerLeft: "Source", body: srcStack)
+        sidebarStack.addArrangedSubview(srcCard)
+        srcCard.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor).isActive = true
+        for b in [ghBtn, crBtn] { b.widthAnchor.constraint(equalTo: srcStack.widthAnchor).isActive = true }
+        idRow.widthAnchor.constraint(equalTo: srcStack.widthAnchor).isActive = true
+
+        // Command card — copy the slash command, plus the install command
+        let cmdStack = NSStackView()
+        cmdStack.orientation = .vertical; cmdStack.alignment = .leading; cmdStack.spacing = 8
+        cmdStack.translatesAutoresizingMaskIntoConstraints = false
+        let copyBtn = sidebarButton("Copy  \(skill.initiator)", "doc.on.clipboard", #selector(copySlashTapped), prominent: true)
+        cmdStack.addArrangedSubview(copyBtn)
+        copyBtn.widthAnchor.constraint(equalTo: cmdStack.widthAnchor).isActive = true
+        if skill.source.contains("/") {
+            let inst = NSTextField(labelWithString: "Install")
+            inst.font = skelfFont(.caption2, .semibold); inst.textColor = .tertiaryLabelColor
+            cmdStack.addArrangedSubview(inst)
+            let chip = monoChip("npx skills add \(skill.source)", #selector(copyInstallTapped))
+            cmdStack.addArrangedSubview(chip)
+            chip.widthAnchor.constraint(equalTo: cmdStack.widthAnchor).isActive = true
+        }
+        let cmdCard = card(headerLeft: "Slash command", body: cmdStack)
+        sidebarStack.addArrangedSubview(cmdCard)
+        cmdCard.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor).isActive = true
+
+        // Details card — compact meta
+        let meta = NSStackView()
+        meta.orientation = .vertical; meta.alignment = .leading; meta.spacing = 7
+        meta.translatesAutoresizingMaskIntoConstraints = false
+        meta.addArrangedSubview(metaRow("Status", skill.enabled ? "Enabled" : "Installed · off"))
+        meta.addArrangedSubview(metaRow("Version", skill.version ?? "unversioned"))
+        meta.addArrangedSubview(metaRow("Category", skill.category))
+        meta.addArrangedSubview(metaRow("Files", "\(skill.fileCount)"))
+        meta.addArrangedSubview(metaRow("Installed", skill.installedAt))
+        let metaCard = card(headerLeft: "Details", body: meta)
+        sidebarStack.addArrangedSubview(metaCard)
+        metaCard.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor).isActive = true
+
+        // Actions card
+        let favBtn = sidebarButton(isFavorite ? "Favorited" : "Favorite", isFavorite ? "star.fill" : "star", #selector(favoriteTapped))
+        favBtn.contentTintColor = isFavorite ? .systemYellow : nil
+        let folderBtn = sidebarButton("Add to Folder…", "folder.badge.plus", #selector(organizeTapped))
+        let revealBtn = sidebarButton("Reveal SKILL.md", "doc.text.magnifyingglass", #selector(revealTapped))
+        let actStack = NSStackView(views: [favBtn, folderBtn, revealBtn])
+        actStack.orientation = .vertical; actStack.alignment = .leading; actStack.spacing = 8
+        actStack.translatesAutoresizingMaskIntoConstraints = false
+        let actCard = card(headerLeft: nil, body: actStack)
+        sidebarStack.addArrangedSubview(actCard)
+        actCard.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor).isActive = true
+        for b in [favBtn, folderBtn, revealBtn] { b.widthAnchor.constraint(equalTo: actStack.widthAnchor).isActive = true }
     }
 
     @objc private func backTapped() { onBack?() }
-
-    @objc private func favoriteTapped() {
-        guard let skill = skill else { return }
-        onToggleFavorite?(skill)
+    @objc private func favoriteTapped() { if let s = skill { onToggleFavorite?(s) } }
+    @objc private func organizeTapped() { if let s = skill { onOrganize?(s, sidebarStack) } }
+    @objc private func copySlashTapped() { if let s = skill { onCopy?(s) } }
+    @objc private func copyInstallTapped() {
+        guard let s = skill, s.source.contains("/") else { return }
+        let pb = NSPasteboard.general; pb.clearContents()
+        pb.setString("npx skills add \(s.source)", forType: .string)
     }
-
-    @objc private func organizeTapped() {
-        guard let skill = skill else { return }
-        onOrganize?(skill, folderButtonRef ?? self)
-    }
-
-    @objc private func copyTapped() {
-        guard let skill = skill else { return }
-        onCopy?(skill)
-        springPop(copyGlass.layer, from: 0.94)
-        copyButton.title = "Copied  ✓"
-        copiedWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self = self, let s = self.skill else { return }
-            self.copyButton.title = "Copy  \(s.initiator)"
-        }
-        copiedWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
-    }
-
     @objc private func revealTapped() {
         guard let skill = skill else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: skill.skillMDPath)])
     }
-
     @objc private func githubTapped() {
         guard let url = skill?.githubURL else { return }
+        NSWorkspace.shared.open(url)
+    }
+    @objc private func creatorTapped() {
+        guard let s = skill, let c = s.source.split(separator: "/").first,
+              let url = URL(string: "https://github.com/\(c)") else { return }
         NSWorkspace.shared.open(url)
     }
 }
@@ -2785,13 +2937,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             host.sceneBridgingOptions = [.title, .toolbars]
             // Create with an explicit frame, THEN attach the content VC, so the window
             // keeps 760×580 instead of collapsing to the content's fitting size.
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 580),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 920, height: 660),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
                              backing: .buffered, defer: false)
             w.contentViewController = host
             w.title = "Skelf"
-            w.minSize = NSSize(width: 640, height: 440)
-            w.setContentSize(NSSize(width: 760, height: 580))
+            w.minSize = NSSize(width: 680, height: 460)
+            w.setContentSize(NSSize(width: 920, height: 660))
             w.center()
             w.isReleasedWhenClosed = false
             w.delegate = self            // for windowWillReturnUndoManager
