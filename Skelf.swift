@@ -475,6 +475,20 @@ enum Palette {
 
 final class FlippedView: NSView { override var isFlipped: Bool { true } }
 
+// A view whose single gradient sublayer always tracks its bounds (monogram tile).
+final class GradientView: NSView {
+    let gradient = CAGradientLayer()
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        gradient.startPoint = CGPoint(x: 0, y: 0)
+        gradient.endPoint = CGPoint(x: 1, y: 1)
+        layer?.addSublayer(gradient)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func layout() { super.layout(); gradient.frame = bounds }
+}
+
 // Scale a layer's `transform` around its own centre — avoids anchorPoint juggling
 // inside Auto Layout (settles back to identity, so layout isn't disturbed).
 func centerScale(_ layer: CALayer, _ s: CGFloat) -> CATransform3D {
@@ -540,9 +554,7 @@ final class SkillGridItem: NSCollectionViewItem {
     private let nameLabel = NSTextField(labelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
     private let menuButton = NSButton()
-    private let starButton = NSButton()
     private let gradient = CAGradientLayer()
-    var onToggleFavorite: (() -> Void)?
     var onMenu: ((NSView) -> Void)?
 
     override func loadView() {
@@ -595,25 +607,11 @@ final class SkillGridItem: NSCollectionViewItem {
         menuButton.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(menuButton)
 
-        starButton.isBordered = false
-        starButton.bezelStyle = .regularSquare
-        starButton.imageScaling = .scaleProportionallyDown
-        starButton.focusRingType = .none
-        starButton.target = self
-        starButton.action = #selector(starClicked)
-        starButton.toolTip = "Pin to favorites"
-        starButton.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(starButton)
-
         NSLayoutConstraint.activate([
             card.topAnchor.constraint(equalTo: root.topAnchor),
             card.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             card.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             card.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            starButton.topAnchor.constraint(equalTo: card.topAnchor, constant: 7),
-            starButton.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 7),
-            starButton.widthAnchor.constraint(equalToConstant: 18),
-            starButton.heightAnchor.constraint(equalToConstant: 18),
             glyph.topAnchor.constraint(equalTo: card.topAnchor, constant: 16),
             glyph.centerXAnchor.constraint(equalTo: card.centerXAnchor),
             glyph.widthAnchor.constraint(equalToConstant: 52),
@@ -641,19 +639,15 @@ final class SkillGridItem: NSCollectionViewItem {
     func configure(_ skill: Skill, isFavorite: Bool) {
         initialsLabel.stringValue = Palette.initials(skill.name)
         nameLabel.stringValue = skill.name
-        metaLabel.stringValue = skill.enabled ? skill.initiator : "\(skill.initiator) · off"
+        let star = isFavorite ? "★ " : ""
+        metaLabel.stringValue = skill.enabled ? "\(star)\(skill.initiator)" : "\(star)\(skill.initiator) · off"
         gradient.colors = Palette.gradientColors(skill.name)
         hovering = false
         applyHoverAndBorder(animated: false)
         view.alphaValue = skill.enabled ? 1.0 : 0.55
         view.toolTip = "\(skill.initiator)\n\n\(skill.description)"
-        starButton.image = NSImage(systemSymbolName: isFavorite ? "star.fill" : "star",
-                                   accessibilityDescription: isFavorite ? "Favorited" : "Add to favorites")
-        starButton.contentTintColor = isFavorite ? .systemYellow : .tertiaryLabelColor
-        starButton.toolTip = isFavorite ? "Unpin from favorites" : "Pin to favorites"
     }
 
-    @objc private func starClicked() { onToggleFavorite?() }
     @objc private func menuClicked() { onMenu?(menuButton) }
 
     func pressPop() { springPop(card.layer, from: 0.93) }
@@ -794,6 +788,67 @@ final class FolderGridItem: NSCollectionViewItem {
 
 // MARK: - Detail screen
 
+// Semantic-font helpers (respect the system text-size ramp instead of magic numbers).
+func skelfFont(_ style: NSFont.TextStyle, _ weight: NSFont.Weight = .regular) -> NSFont {
+    NSFont.systemFont(ofSize: NSFont.preferredFont(forTextStyle: style).pointSize, weight: weight)
+}
+func skelfMono(_ style: NSFont.TextStyle, _ weight: NSFont.Weight = .medium) -> NSFont {
+    NSFont.monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: style).pointSize, weight: weight)
+}
+
+// An opaque bento card: subtle fill + hairline border + concentric corner (content
+// surface — deliberately NOT Liquid Glass, which is reserved for the primary action).
+final class MetaCardView: NSView {
+    private let keyLabel = NSTextField(labelWithString: "")
+    private let valueLabel = NSTextField(labelWithString: "")
+
+    init(key: String, value: String, mono: Bool) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor.separatorColor.cgColor
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        translatesAutoresizingMaskIntoConstraints = false
+
+        keyLabel.stringValue = key.uppercased()
+        keyLabel.font = skelfFont(.caption2, .semibold)
+        keyLabel.textColor = .tertiaryLabelColor
+        keyLabel.lineBreakMode = .byTruncatingTail
+        keyLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        valueLabel.stringValue = value
+        valueLabel.font = mono ? skelfMono(.callout, .regular) : skelfFont(.body)
+        valueLabel.textColor = .labelColor
+        valueLabel.lineBreakMode = mono ? .byTruncatingMiddle : .byTruncatingTail
+        valueLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [keyLabel, valueLabel])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 56),
+        ])
+        keyLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        valueLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func updateLayer() {
+        layer?.borderColor = NSColor.separatorColor.cgColor
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+    }
+}
+
+// MARK: - Detail screen
+
 final class SkillDetailView: NSView {
     var onBack: (() -> Void)?
     var onCopy: ((Skill) -> Void)?
@@ -801,47 +856,104 @@ final class SkillDetailView: NSView {
     var onOrganize: ((Skill, NSView) -> Void)?
     private var skill: Skill?
 
-    private let favoriteButton = NSButton()
-    private let folderButton = NSButton()
-    private let glyph = NSView()
-    private let gradient = CAGradientLayer()
+    // Navigation chrome — collapsed when hosted inside a SwiftUI NavigationStack.
+    private let backBar = NSView()
+    private let topDivider = NSBox()
+    private var backBarHeight: NSLayoutConstraint!
+
+    // hero
+    private let glyph = GradientView()
     private let initialsLabel = NSTextField(labelWithString: "")
     private let nameLabel = NSTextField(labelWithString: "")
-    private let statusPill = NSTextField(labelWithString: "")
+    private let initiatorBox = NSView()
+    private let initiatorLabel = NSTextField(labelWithString: "")
+    private let statusBox = NSView()
+    private let statusLabel = NSTextField(labelWithString: "")
+
+    // primary action
     private let copyButton = NSButton()
-    private let copiedLabel = NSTextField(labelWithString: "")
+    private let copyGlass = NSGlassEffectView()
+
+    // meta bento + description
+    private let metaColumn = NSStackView()
     private let descLabel = NSTextField(wrappingLabelWithString: "")
-    private let metaStack = NSStackView()
     private var copiedWork: DispatchWorkItem?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        wantsLayer = true
         build()
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    private func styleSecondaryButton(_ b: NSButton, _ title: String) {
+    /// Hide the in-view back bar (used when a SwiftUI toolbar provides the back chevron).
+    func setShowsBackBar(_ show: Bool) {
+        backBar.isHidden = !show
+        topDivider.isHidden = !show
+        backBarHeight.constant = show ? 40 : 0
+    }
+
+    private func styleLinkButton(_ b: NSButton, _ title: String, _ symbol: String) {
         b.title = title
+        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        b.imagePosition = .imageLeading
         b.bezelStyle = .rounded
         b.controlSize = .small
         b.translatesAutoresizingMaskIntoConstraints = false
     }
 
+    private func iconButton(_ symbol: String, _ action: Selector) -> NSButton {
+        let b = NSButton()
+        b.isBordered = false
+        b.bezelStyle = .regularSquare
+        b.imageScaling = .scaleProportionallyDown
+        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        b.contentTintColor = .secondaryLabelColor
+        b.focusRingType = .none
+        b.target = self
+        b.action = action
+        b.translatesAutoresizingMaskIntoConstraints = false
+        b.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        b.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        return b
+    }
+
+    private func capsule(_ box: NSView, _ label: NSTextField, font: NSFont) {
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 9
+        box.translatesAutoresizingMaskIntoConstraints = false
+        label.font = font
+        label.drawsBackground = false
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 9),
+            label.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -9),
+            label.topAnchor.constraint(equalTo: box.topAnchor, constant: 3),
+            label.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -3),
+        ])
+    }
+
     private func build() {
-        // top bar with a back button
-        let back = NSButton(title: "‹  All skills", target: self, action: #selector(backTapped))
+        // --- nav chrome (back bar) ---
+        backBar.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(backBar)
+        let back = NSButton(title: "All skills", target: self, action: #selector(backTapped))
+        back.image = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Back")
+        back.imagePosition = .imageLeading
         back.bezelStyle = .recessed
         back.isBordered = false
         back.contentTintColor = .controlAccentColor
-        back.font = .systemFont(ofSize: 13, weight: .medium)
+        back.font = skelfFont(.callout, .medium)
         back.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(back)
+        backBar.addSubview(back)
 
-        let topDivider = NSBox(); topDivider.boxType = .separator
+        topDivider.boxType = .separator
         topDivider.translatesAutoresizingMaskIntoConstraints = false
         addSubview(topDivider)
 
-        // scroll area
+        // --- scroll area + content stack ---
         let scroll = NSScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.hasVerticalScroller = true
@@ -853,97 +965,123 @@ final class SkillDetailView: NSView {
         doc.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = doc
 
-        // hero
-        glyph.wantsLayer = true
+        let content = NSStackView()
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 18
+        content.translatesAutoresizingMaskIntoConstraints = false
+        doc.addSubview(content)
+
+        // hero block
         glyph.translatesAutoresizingMaskIntoConstraints = false
-        gradient.frame = CGRect(x: 0, y: 0, width: 64, height: 64)
-        gradient.cornerRadius = 15
-        gradient.startPoint = CGPoint(x: 0, y: 0); gradient.endPoint = CGPoint(x: 1, y: 1)
-        glyph.layer?.addSublayer(gradient)
-        initialsLabel.font = .systemFont(ofSize: 24, weight: .bold)
+        glyph.gradient.cornerRadius = 16
+        initialsLabel.font = skelfFont(.title1, .bold)
         initialsLabel.textColor = .white
         initialsLabel.alignment = .center
         initialsLabel.translatesAutoresizingMaskIntoConstraints = false
         glyph.addSubview(initialsLabel)
-        doc.addSubview(glyph)
 
-        nameLabel.font = .systemFont(ofSize: 22, weight: .bold)
+        nameLabel.font = skelfFont(.title2, .bold)
         nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.maximumNumberOfLines = 2
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(nameLabel)
 
-        statusPill.font = .systemFont(ofSize: 11, weight: .semibold)
-        statusPill.wantsLayer = true
-        statusPill.drawsBackground = false
-        statusPill.alignment = .center
-        statusPill.layer?.cornerRadius = 9
-        statusPill.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(statusPill)
+        capsule(initiatorBox, initiatorLabel, font: skelfMono(.callout, .medium))
+        initiatorBox.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.14).cgColor
+        initiatorLabel.textColor = .controlAccentColor
+        capsule(statusBox, statusLabel, font: skelfFont(.caption1, .semibold))
 
+        let chipRow = NSStackView(views: [initiatorBox, statusBox])
+        chipRow.orientation = .horizontal
+        chipRow.spacing = 8
+        chipRow.alignment = .centerY
+        chipRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let heroText = NSStackView(views: [nameLabel, chipRow])
+        heroText.orientation = .vertical
+        heroText.alignment = .leading
+        heroText.spacing = 8
+        heroText.translatesAutoresizingMaskIntoConstraints = false
+
+        let favBtn = iconButton("star", #selector(favoriteTapped))
+        favoriteButtonRef = favBtn
+        let folderBtn = iconButton("folder.badge.plus", #selector(organizeTapped))
+        folderButtonRef = folderBtn
+        let heroActions = NSStackView(views: [favBtn, folderBtn])
+        heroActions.orientation = .horizontal
+        heroActions.spacing = 2
+        heroActions.translatesAutoresizingMaskIntoConstraints = false
+
+        let hero = NSView()
+        hero.translatesAutoresizingMaskIntoConstraints = false
+        hero.addSubview(glyph); hero.addSubview(heroText); hero.addSubview(heroActions)
+        content.addArrangedSubview(hero)
+
+        // primary action — Liquid Glass Copy pill
         copyButton.isBordered = false
         copyButton.bezelStyle = .rounded
         copyButton.controlSize = .large
         copyButton.keyEquivalent = "\r"
-        copyButton.font = .systemFont(ofSize: 14, weight: .semibold)
+        copyButton.font = skelfFont(.headline, .semibold)
         copyButton.contentTintColor = .white
         copyButton.target = self
         copyButton.action = #selector(copyTapped)
         copyButton.translatesAutoresizingMaskIntoConstraints = false
-        // Interactive Liquid Glass: the pill subtly bounces when clicked (macOS 27).
-        let copyGlass = NSGlassEffectView()
-        copyGlass.cornerRadius = 18
+        copyGlass.cornerRadius = 22
         copyGlass.tintColor = .controlAccentColor
         copyGlass.contentView = copyButton
         copyGlass.translatesAutoresizingMaskIntoConstraints = false
         if #available(macOS 27.0, *) { copyGlass.effectIsInteractive = true }
-        doc.addSubview(copyGlass)
+        content.addArrangedSubview(copyGlass)
 
-        copiedLabel.stringValue = "Copied to clipboard ✓"
-        copiedLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        copiedLabel.textColor = .systemGreen
-        copiedLabel.isHidden = true
-        copiedLabel.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(copiedLabel)
+        // meta bento
+        metaColumn.orientation = .vertical
+        metaColumn.alignment = .leading
+        metaColumn.distribution = .fill
+        metaColumn.spacing = 12
+        metaColumn.translatesAutoresizingMaskIntoConstraints = false
+        content.addArrangedSubview(metaColumn)
+
+        // description
+        let descBlock = NSView()
+        descBlock.translatesAutoresizingMaskIntoConstraints = false
+        let descHeader = NSTextField(labelWithString: "DESCRIPTION")
+        descHeader.font = skelfFont(.caption2, .semibold)
+        descHeader.textColor = .tertiaryLabelColor
+        descHeader.translatesAutoresizingMaskIntoConstraints = false
+        descBlock.addSubview(descHeader)
+        descLabel.font = skelfFont(.body)
+        descLabel.textColor = .labelColor
+        descLabel.translatesAutoresizingMaskIntoConstraints = false
+        descBlock.addSubview(descLabel)
+        content.addArrangedSubview(descBlock)
 
         // secondary actions
         let revealBtn = NSButton(title: "Reveal SKILL.md", target: self, action: #selector(revealTapped))
-        styleSecondaryButton(revealBtn, "Reveal SKILL.md")
-        let githubBtn = NSButton(title: "View on GitHub ↗", target: self, action: #selector(githubTapped))
-        styleSecondaryButton(githubBtn, "View on GitHub ↗")
-        favoriteButton.target = self
-        favoriteButton.action = #selector(favoriteTapped)
-        styleSecondaryButton(favoriteButton, "☆ Favorite")
-        folderButton.target = self
-        folderButton.action = #selector(organizeTapped)
-        styleSecondaryButton(folderButton, "Add to folder ▾")
-        let actions = NSStackView(views: [favoriteButton, folderButton, revealBtn, githubBtn])
-        actions.orientation = .horizontal
-        actions.spacing = 8
-        actions.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(actions)
+        styleLinkButton(revealBtn, "Reveal SKILL.md", "doc.text")
+        let githubBtn = NSButton(title: "View on GitHub", target: self, action: #selector(githubTapped))
+        styleLinkButton(githubBtn, "View on GitHub", "arrow.up.right.square")
+        let links = NSStackView(views: [revealBtn, githubBtn])
+        links.orientation = .horizontal
+        links.spacing = 8
+        links.translatesAutoresizingMaskIntoConstraints = false
+        content.addArrangedSubview(links)
 
-        // meta + description stack
-        metaStack.orientation = .vertical
-        metaStack.alignment = .leading
-        metaStack.spacing = 9
-        metaStack.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(metaStack)
+        content.setCustomSpacing(22, after: hero)
+        content.setCustomSpacing(24, after: copyGlass)
+        content.setCustomSpacing(24, after: metaColumn)
+        content.setCustomSpacing(20, after: descBlock)
 
-        let descHeader = NSTextField(labelWithString: "DESCRIPTION")
-        descHeader.font = .systemFont(ofSize: 10, weight: .semibold)
-        descHeader.textColor = .tertiaryLabelColor
-        descHeader.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(descHeader)
-
-        descLabel.font = .systemFont(ofSize: 13)
-        descLabel.textColor = .labelColor
-        descLabel.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(descLabel)
-
+        backBarHeight = backBar.heightAnchor.constraint(equalToConstant: 40)
         NSLayoutConstraint.activate([
-            back.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            back.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            topDivider.topAnchor.constraint(equalTo: back.bottomAnchor, constant: 8),
+            backBar.topAnchor.constraint(equalTo: topAnchor),
+            backBar.leadingAnchor.constraint(equalTo: leadingAnchor),
+            backBar.trailingAnchor.constraint(equalTo: trailingAnchor),
+            backBarHeight,
+            back.leadingAnchor.constraint(equalTo: backBar.leadingAnchor, constant: 12),
+            back.centerYAnchor.constraint(equalTo: backBar.centerYAnchor),
+
+            topDivider.topAnchor.constraint(equalTo: backBar.bottomAnchor),
             topDivider.leadingAnchor.constraint(equalTo: leadingAnchor),
             topDivider.trailingAnchor.constraint(equalTo: trailingAnchor),
 
@@ -957,87 +1095,95 @@ final class SkillDetailView: NSView {
             doc.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
             doc.widthAnchor.constraint(equalTo: clip.widthAnchor),
 
-            glyph.topAnchor.constraint(equalTo: doc.topAnchor, constant: 22),
-            glyph.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 24),
+            content.topAnchor.constraint(equalTo: doc.topAnchor, constant: 24),
+            content.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 24),
+            content.trailingAnchor.constraint(equalTo: doc.trailingAnchor, constant: -24),
+            content.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -24),
+
+            // hero internal layout
+            hero.widthAnchor.constraint(equalTo: content.widthAnchor),
+            glyph.topAnchor.constraint(equalTo: hero.topAnchor),
+            glyph.leadingAnchor.constraint(equalTo: hero.leadingAnchor),
             glyph.widthAnchor.constraint(equalToConstant: 64),
             glyph.heightAnchor.constraint(equalToConstant: 64),
+            hero.bottomAnchor.constraint(greaterThanOrEqualTo: glyph.bottomAnchor),
             initialsLabel.centerXAnchor.constraint(equalTo: glyph.centerXAnchor),
             initialsLabel.centerYAnchor.constraint(equalTo: glyph.centerYAnchor),
+            heroActions.topAnchor.constraint(equalTo: hero.topAnchor, constant: 2),
+            heroActions.trailingAnchor.constraint(equalTo: hero.trailingAnchor),
+            heroText.topAnchor.constraint(equalTo: glyph.topAnchor),
+            heroText.leadingAnchor.constraint(equalTo: glyph.trailingAnchor, constant: 16),
+            heroText.trailingAnchor.constraint(lessThanOrEqualTo: heroActions.leadingAnchor, constant: -12),
+            hero.bottomAnchor.constraint(greaterThanOrEqualTo: heroText.bottomAnchor),
+            statusBox.heightAnchor.constraint(equalToConstant: 20),
+            initiatorBox.heightAnchor.constraint(equalToConstant: 20),
 
-            nameLabel.topAnchor.constraint(equalTo: glyph.topAnchor, constant: 6),
-            nameLabel.leadingAnchor.constraint(equalTo: glyph.trailingAnchor, constant: 16),
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: doc.trailingAnchor, constant: -24),
+            // primary action
+            copyGlass.heightAnchor.constraint(equalToConstant: 44),
+            copyGlass.widthAnchor.constraint(greaterThanOrEqualToConstant: 240),
+            copyGlass.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor),
 
-            statusPill.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 8),
-            statusPill.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
-            statusPill.heightAnchor.constraint(equalToConstant: 20),
-
-            copyGlass.topAnchor.constraint(equalTo: glyph.bottomAnchor, constant: 22),
-            copyGlass.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 24),
-            copyGlass.heightAnchor.constraint(equalToConstant: 38),
-            copyGlass.widthAnchor.constraint(greaterThanOrEqualToConstant: 230),
-            copiedLabel.centerYAnchor.constraint(equalTo: copyGlass.centerYAnchor),
-            copiedLabel.leadingAnchor.constraint(equalTo: copyGlass.trailingAnchor, constant: 14),
-
-            actions.topAnchor.constraint(equalTo: copyGlass.bottomAnchor, constant: 12),
-            actions.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 24),
-
-            metaStack.topAnchor.constraint(equalTo: actions.bottomAnchor, constant: 20),
-            metaStack.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 24),
-            metaStack.trailingAnchor.constraint(equalTo: doc.trailingAnchor, constant: -24),
-
-            descHeader.topAnchor.constraint(equalTo: metaStack.bottomAnchor, constant: 20),
-            descHeader.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 24),
-            descLabel.topAnchor.constraint(equalTo: descHeader.bottomAnchor, constant: 6),
-            descLabel.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 24),
-            descLabel.trailingAnchor.constraint(equalTo: doc.trailingAnchor, constant: -24),
-            descLabel.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -24),
+            // meta + description span the content width
+            metaColumn.widthAnchor.constraint(equalTo: content.widthAnchor),
+            descBlock.widthAnchor.constraint(equalTo: content.widthAnchor),
+            descHeader.topAnchor.constraint(equalTo: descBlock.topAnchor),
+            descHeader.leadingAnchor.constraint(equalTo: descBlock.leadingAnchor),
+            descLabel.topAnchor.constraint(equalTo: descHeader.bottomAnchor, constant: 8),
+            descLabel.leadingAnchor.constraint(equalTo: descBlock.leadingAnchor),
+            descLabel.trailingAnchor.constraint(lessThanOrEqualTo: descBlock.trailingAnchor),
+            descLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 640),
+            descLabel.bottomAnchor.constraint(equalTo: descBlock.bottomAnchor),
         ])
     }
 
-    private func metaRow(_ key: String, _ value: String) -> NSView {
-        let k = NSTextField(labelWithString: key.uppercased())
-        k.font = .systemFont(ofSize: 10, weight: .semibold)
-        k.textColor = .tertiaryLabelColor
-        k.translatesAutoresizingMaskIntoConstraints = false
-        k.widthAnchor.constraint(equalToConstant: 90).isActive = true
-        let v = NSTextField(labelWithString: value)
-        v.font = .systemFont(ofSize: 12)
-        v.textColor = .labelColor
-        v.lineBreakMode = .byTruncatingMiddle
-        v.translatesAutoresizingMaskIntoConstraints = false
-        let row = NSStackView(views: [k, v])
+    private weak var favoriteButtonRef: NSButton?
+    private weak var folderButtonRef: NSButton?
+
+    // A bento row of equal-width cards (one card = full width).
+    private func metaRow(_ cards: [NSView]) -> NSView {
+        let row = NSStackView(views: cards)
         row.orientation = .horizontal
-        row.spacing = 10
-        row.alignment = .firstBaseline
+        row.distribution = cards.count > 1 ? .fillEqually : .fill
+        row.alignment = .top
+        row.spacing = 12
+        row.translatesAutoresizingMaskIntoConstraints = false
         return row
     }
 
     func configure(_ skill: Skill, isFavorite: Bool) {
         self.skill = skill
-        copiedLabel.isHidden = true
         initialsLabel.stringValue = Palette.initials(skill.name)
         nameLabel.stringValue = skill.name
-        gradient.colors = Palette.gradientColors(skill.name)
+        glyph.gradient.colors = Palette.gradientColors(skill.name)
 
-        favoriteButton.title = isFavorite ? "★ Favorited" : "☆ Favorite"
-        favoriteButton.contentTintColor = isFavorite ? .systemYellow : nil
-
-        statusPill.stringValue = skill.enabled ? "  ●  Enabled  " : "  ○  Installed · off  "
-        statusPill.textColor = skill.enabled ? .systemGreen : .secondaryLabelColor
-        statusPill.layer?.backgroundColor = (skill.enabled ? NSColor.systemGreen : NSColor.systemGray)
+        initiatorLabel.stringValue = skill.initiator
+        statusLabel.stringValue = skill.enabled ? "● Enabled" : "○ Off"
+        statusLabel.textColor = skill.enabled ? .systemGreen : .secondaryLabelColor
+        statusBox.layer?.backgroundColor = (skill.enabled ? NSColor.systemGreen : NSColor.systemGray)
             .withAlphaComponent(0.16).cgColor
+
+        favoriteButtonRef?.image = NSImage(systemSymbolName: isFavorite ? "star.fill" : "star",
+                                           accessibilityDescription: isFavorite ? "Favorited" : "Favorite")
+        favoriteButtonRef?.contentTintColor = isFavorite ? .systemYellow : .secondaryLabelColor
+        favoriteButtonRef?.toolTip = isFavorite ? "Unpin from favorites" : "Pin to favorites"
+        folderButtonRef?.toolTip = "Add to a folder…"
 
         copyButton.title = "Copy  \(skill.initiator)"
 
-        metaStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        metaStack.addArrangedSubview(metaRow("Initiator", skill.initiator))
-        metaStack.addArrangedSubview(metaRow("Source", skill.source))
-        metaStack.addArrangedSubview(metaRow("Category", skill.category))
-        metaStack.addArrangedSubview(metaRow("Version", skill.version ?? "unversioned"))
-        metaStack.addArrangedSubview(metaRow("Installed", skill.installedAt))
-        metaStack.addArrangedSubview(metaRow("Files", "\(skill.fileCount)"))
-        metaStack.addArrangedSubview(metaRow("Path", skill.skillPath))
+        metaColumn.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let version = MetaCardView(key: "Version", value: skill.version ?? "unversioned", mono: false)
+        let category = MetaCardView(key: "Category", value: skill.category, mono: false)
+        let files = MetaCardView(key: "Files", value: "\(skill.fileCount)", mono: false)
+        let installed = MetaCardView(key: "Installed", value: skill.installedAt, mono: false)
+        let source = MetaCardView(key: "Source", value: skill.source, mono: false)
+        let path = MetaCardView(key: "Path", value: skill.skillPath, mono: true)
+        metaColumn.addArrangedSubview(metaRow([version, category]))
+        metaColumn.addArrangedSubview(metaRow([files, installed]))
+        metaColumn.addArrangedSubview(metaRow([source]))
+        metaColumn.addArrangedSubview(metaRow([path]))
+        for row in metaColumn.arrangedSubviews {
+            row.widthAnchor.constraint(equalTo: metaColumn.widthAnchor).isActive = true
+        }
 
         descLabel.stringValue = skill.description.isEmpty ? "No description in SKILL.md." : skill.description
     }
@@ -1051,17 +1197,21 @@ final class SkillDetailView: NSView {
 
     @objc private func organizeTapped() {
         guard let skill = skill else { return }
-        onOrganize?(skill, folderButton)
+        onOrganize?(skill, folderButtonRef ?? self)
     }
 
     @objc private func copyTapped() {
         guard let skill = skill else { return }
         onCopy?(skill)
-        copiedLabel.isHidden = false
+        springPop(copyGlass.layer, from: 0.94)
+        copyButton.title = "Copied  ✓"
         copiedWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.copiedLabel.isHidden = true }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, let s = self.skill else { return }
+            self.copyButton.title = "Copy  \(s.initiator)"
+        }
         copiedWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
     @objc private func revealTapped() {
@@ -1442,7 +1592,6 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
             let item = cv.makeItem(withIdentifier: skillItemID, for: indexPath)
             if let grid = item as? SkillGridItem {
                 grid.configure(skill, isFavorite: favorites.isFavorite(skill.id))
-                grid.onToggleFavorite = { [weak self] in self?.favorites.toggle(skill.id) }
                 grid.onMenu = { [weak self] anchor in
                     guard let self = self else { return }
                     self.popMenu(self.skillMenu(skill), at: anchor)
@@ -1573,6 +1722,17 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
         menu.addItem(mi("Open", #selector(ctxOpenSkill(_:)), skill.id))
         menu.addItem(mi("Copy Slash Command", #selector(ctxCopySkill(_:)), skill.id))
         menu.addItem(.separator())
+        let fav = favorites.isFavorite(skill.id)
+        menu.addItem(mi(fav ? "Unfavorite" : "Favorite", #selector(ctxToggleFavorite(_:)), skill.id))
+        menu.addItem(.separator())
+        let src = currentFolderId
+        let moveItem = NSMenuItem(title: "Move to Folder", action: nil, keyEquivalent: "")
+        moveItem.submenu = folderTreeMenu { CtxPayload(skillId: skill.id, source: src, target: $0, copy: false) }
+        menu.addItem(moveItem)
+        let copyItem = NSMenuItem(title: "Copy to Folder", action: nil, keyEquivalent: "")
+        copyItem.submenu = folderTreeMenu { CtxPayload(skillId: skill.id, target: $0, copy: true) }
+        menu.addItem(copyItem)
+        menu.addItem(.separator())
         menu.addItem(mi("Cut", #selector(ctxCutSkill(_:)), skill.id))
         menu.addItem(mi("Copy", #selector(ctxCopySkillToClip(_:)), skill.id))
         if currentFolderId != folders.rootId {
@@ -1622,6 +1782,9 @@ final class SkillsViewController: NSViewController, NSCollectionViewDataSource, 
     }
     @objc private func ctxCopySkill(_ sender: NSMenuItem) {
         if let id = sender.representedObject as? String, let s = store.skills.first(where: { $0.id == id }) { onCopy(s) }
+    }
+    @objc private func ctxToggleFavorite(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? String { favorites.toggle(id) }
     }
     @objc private func ctxRemoveSkill(_ sender: NSMenuItem) {
         if let id = sender.representedObject as? String { folders.moveSkill(id, from: currentFolderId, to: folders.rootId) }
