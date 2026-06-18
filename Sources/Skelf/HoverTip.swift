@@ -74,18 +74,30 @@ final class SkillHoverTip {
         glass.contentView = inner
     }
 
+    private var targetCursor: NSPoint = .zero
+    private var curScreen: NSScreen?
+    private var pendingSkill: Skill?
+
     /// Show the tip for a card after a brief rest (so flicking across cards doesn't flash it).
-    func schedule(for skill: Skill, cardScreenFrame: NSRect, on screen: NSScreen?) {
+    /// `cursor` is the pointer location in screen coordinates (NSEvent.mouseLocation).
+    func schedule(for skill: Skill, at cursor: NSPoint, on screen: NSScreen?) {
+        targetCursor = cursor; curScreen = screen; pendingSkill = skill
         pending?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.present(skill, cardScreenFrame, screen) }
+        let work = DispatchWorkItem { [weak self] in self?.present() }
         pending = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    /// Track the pointer: reposition the tip (or just remember where it'll appear).
+    func update(cursor: NSPoint) {
+        targetCursor = cursor
+        if panel.isVisible { place(near: cursor) }
     }
 
     /// Cancel a pending tip and fade out any visible one.
     func cancel() {
         pending?.cancel(); pending = nil
-        shownFor = nil
+        shownFor = nil; pendingSkill = nil
         guard panel.isVisible else { return }
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.12
@@ -96,7 +108,21 @@ final class SkillHoverTip {
         })
     }
 
-    private func present(_ skill: Skill, _ card: NSRect, _ screen: NSScreen?) {
+    /// Put the tip just below-right of the pointer (flipping above / clamping to the screen).
+    private func place(near cursor: NSPoint) {
+        let w = panel.frame.width, h = panel.frame.height
+        let vf = (curScreen ?? NSScreen.main)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 2000, height: 1200)
+        var x = cursor.x + 14
+        var y = cursor.y - 18 - h                       // below the pointer
+        if y < vf.minY + 6 { y = cursor.y + 18 }        // no room below → above it
+        x = max(vf.minX + 6, min(x, vf.maxX - w - 6))
+        y = max(vf.minY + 6, min(y, vf.maxY - h - 6))
+        panel.setFrameOrigin(NSPoint(x: x.rounded(), y: y.rounded()))
+    }
+
+    private func present() {
+        guard let skill = pendingSkill else { return }
         nameLabel.stringValue = skill.name
         cmdLabel.stringValue = skill.initiator
         let creator = FolderStore.creatorName(skill.source)
@@ -115,13 +141,7 @@ final class SkillHoverTip {
         let h = ceil(stack.fittingSize.height) + padY * 2
         panel.setContentSize(NSSize(width: w, height: h))
 
-        // Position centered just below the card, flipping above if there's no room.
-        let vf = (screen ?? NSScreen.main)?.visibleFrame ?? card
-        var x = card.midX - w / 2
-        var y = card.minY - 8 - h
-        if y < vf.minY + 6 { y = card.maxY + 8 }
-        x = max(vf.minX + 6, min(x, vf.maxX - w - 6))
-        panel.setFrameOrigin(NSPoint(x: x.rounded(), y: y.rounded()))
+        place(near: targetCursor)
 
         if shownFor == skill.id, panel.isVisible {
             panel.alphaValue = 1

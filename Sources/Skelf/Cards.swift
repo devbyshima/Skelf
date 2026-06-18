@@ -342,8 +342,8 @@ final class SkillGridItem: NSCollectionViewItem {
             nameLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
         ])
         nameLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
-        root.addTrackingArea(NSTrackingArea(rect: .zero,
-            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self, userInfo: nil))
+        root.addTrackingArea(NSTrackingArea(rect: .zero,                  // .mouseMoved → the hover tip follows the pointer
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeInActiveApp, .inVisibleRect], owner: self, userInfo: nil))
         view = root
     }
 
@@ -410,11 +410,9 @@ final class SkillGridItem: NSCollectionViewItem {
     }
     override func mouseEntered(with event: NSEvent) {
         hovering = true; applyHover()
-        if let s = skill, let win = view.window {
-            let frame = win.convertToScreen(view.convert(view.bounds, to: nil))
-            SkillHoverTip.shared.schedule(for: s, cardScreenFrame: frame, on: win.screen)
-        }
+        if let s = skill { SkillHoverTip.shared.schedule(for: s, at: NSEvent.mouseLocation, on: view.window?.screen) }
     }
+    override func mouseMoved(with event: NSEvent) { SkillHoverTip.shared.update(cursor: NSEvent.mouseLocation) }
     override func mouseExited(with event: NSEvent) { hovering = false; applyHover(); SkillHoverTip.shared.cancel() }
     private func applyHover() {
         guard let l = view.layer else { return }
