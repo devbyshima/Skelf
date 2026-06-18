@@ -1000,11 +1000,9 @@ final class SkillGridItem: NSCollectionViewItem {
 
 final class FolderGridItem: NSCollectionViewItem {
     private let art = SkillArtView()
-    private let icon = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let countLabel = NSTextField(labelWithString: "")
     private var menuCircle: GlassCircleButton!
-    private let barBadge = NSImageView()
     private var hovering = false
     private var artKey = ""
     var onMenu: ((NSView) -> Void)?
@@ -1015,22 +1013,9 @@ final class FolderGridItem: NSCollectionViewItem {
         art.layer?.cornerRadius = 22
         root.addSubview(art)
 
-        icon.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: "Folder")
-        icon.contentTintColor = NSColor.white.withAlphaComponent(0.92)
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 50, weight: .semibold)
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(icon)
-
         menuCircle = GlassCircleButton(symbol: "ellipsis", target: self, action: #selector(menuClicked))
-        root.addSubview(menuCircle)
-
-        barBadge.image = NSImage(systemSymbolName: "menubar.rectangle", accessibilityDescription: "In menu bar")
-        barBadge.contentTintColor = .white
-        barBadge.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
-        barBadge.translatesAutoresizingMaskIntoConstraints = false
-        barBadge.isHidden = true
-        root.addSubview(barBadge)
+        let controls = makeGlassControls([menuCircle])   // same glass treatment as skill cards
+        root.addSubview(controls)
 
         nameLabel.font = .systemFont(ofSize: 17, weight: .bold)
         nameLabel.textColor = .white
@@ -1050,14 +1035,8 @@ final class FolderGridItem: NSCollectionViewItem {
             art.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             art.trailingAnchor.constraint(equalTo: root.trailingAnchor),
 
-            icon.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: root.centerYAnchor, constant: -18),
-
-            menuCircle.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
-            menuCircle.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
-
-            barBadge.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
-            barBadge.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            controls.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
+            controls.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
 
             countLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             countLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
@@ -1094,7 +1073,6 @@ final class FolderGridItem: NSCollectionViewItem {
         if f > 0 { parts.append("\(f) folder\(f == 1 ? "" : "s")") }
         parts.append("\(s) skill\(s == 1 ? "" : "s")")
         countLabel.stringValue = parts.joined(separator: " · ")
-        barBadge.isHidden = !inMenuBar
         view.toolTip = node.name
         resetHover()
     }
@@ -2587,14 +2565,9 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         backButton.contentTintColor = .controlAccentColor
         backButton.target = self
         backButton.action = #selector(goBack)
-        let leftStack = NSStackView(views: [backButton, titleLabel])
-        leftStack.orientation = .horizontal
-        leftStack.spacing = 5
-        leftStack.alignment = .centerY
-        leftStack.translatesAutoresizingMaskIntoConstraints = false
+        backButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
         titleLabel.font = .systemFont(ofSize: 15, weight: .bold)
         titleLabel.lineBreakMode = .byTruncatingTail
-        root.addSubview(leftStack)
 
         windowButton.image = NSImage(systemSymbolName: "macwindow", accessibilityDescription: "Open Skelf window")
         windowButton.imagePosition = .imageOnly
@@ -2605,10 +2578,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         windowButton.target = self
         windowButton.action = #selector(openApp)
         windowButton.translatesAutoresizingMaskIntoConstraints = false
-        if #available(macOS 11.0, *) {
-            windowButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        }
-        root.addSubview(windowButton)
+        windowButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
 
         optionsButton.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "Options")
         optionsButton.imagePosition = .imageOnly
@@ -2619,10 +2589,22 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         optionsButton.target = self
         optionsButton.action = #selector(showOptions)
         optionsButton.translatesAutoresizingMaskIntoConstraints = false
-        if #available(macOS 11.0, *) {
-            optionsButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        }
-        root.addSubview(optionsButton)
+        optionsButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+
+        // One centered header row: back + title pack left, window + options pack right,
+        // all sharing a single vertical centerline (alignment .centerY).
+        let header = NSStackView()
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 6
+        header.detachesHiddenViews = true
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.addView(backButton, in: .leading)
+        header.addView(titleLabel, in: .leading)
+        header.addView(windowButton, in: .trailing)
+        header.addView(optionsButton, in: .trailing)
+        header.setCustomSpacing(10, after: windowButton)
+        root.addSubview(header)
 
         searchField.placeholderString = "Search"
         searchField.delegate = self
@@ -2644,19 +2626,16 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
 
         let clip = scroll.contentView
         NSLayoutConstraint.activate([
-            leftStack.topAnchor.constraint(equalTo: root.topAnchor, constant: 18),
-            leftStack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
-            leftStack.trailingAnchor.constraint(lessThanOrEqualTo: windowButton.leadingAnchor, constant: -8),
-            windowButton.centerYAnchor.constraint(equalTo: leftStack.centerYAnchor),
-            windowButton.trailingAnchor.constraint(equalTo: optionsButton.leadingAnchor, constant: -8),
+            header.topAnchor.constraint(equalTo: root.topAnchor, constant: 18),
+            header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            backButton.heightAnchor.constraint(equalToConstant: 22),
             windowButton.widthAnchor.constraint(equalToConstant: 24),
-            windowButton.heightAnchor.constraint(equalToConstant: 20),
-            optionsButton.centerYAnchor.constraint(equalTo: leftStack.centerYAnchor),
-            optionsButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            windowButton.heightAnchor.constraint(equalToConstant: 22),
             optionsButton.widthAnchor.constraint(equalToConstant: 24),
-            optionsButton.heightAnchor.constraint(equalToConstant: 20),
+            optionsButton.heightAnchor.constraint(equalToConstant: 22),
 
-            searchField.topAnchor.constraint(equalTo: leftStack.bottomAnchor, constant: 14),
+            searchField.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 14),
             searchField.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             searchField.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
 
