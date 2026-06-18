@@ -460,10 +460,10 @@ final class FolderStore {
     /// root. Only skills at root are touched — anything the user filed is left alone.
     /// Auto-folders that stop being valid are dissolved. Runs on every reload (+ again
     /// as background GitHub verification resolves).
-    func autoCategorize(_ installed: [Skill], isVerified: (String) -> Bool) {
+    func autoCategorize(_ installed: [Skill], isVerified: (Skill) -> Bool) {
         var changed = false
         func creator(of s: Skill) -> String? {
-            guard s.source.contains("/"), isVerified(s.source) else { return nil }
+            guard s.source.contains("/"), isVerified(s) else { return nil }
             return s.source.split(separator: "/").first.map(String.init)
         }
         let creatorOf = Dictionary(uniqueKeysWithValues: installed.compactMap { s in creator(of: s).map { (s.id, $0) } })
@@ -622,51 +622,65 @@ final class GlassCardView: NSGlassEffectView {
     }
 }
 
-// Verifies a skill's source repo actually exists on GitHub (HEAD https://github.com/
-// <owner>/<repo>). Only verified skills may be auto-filed under a creator; if the page
-// can't be confirmed, we can't say who the skill belongs to, so it stays unfiled.
-// Confirmed repos persist (UserDefaults); 404s/errors stay in memory so a later-created
-// repo or a flaky network can still resolve on a future launch.
+// Verifies that a skill's actual GitHub page exists (HEAD the skill's /tree/HEAD/<path>
+// URL — which also proves the repo and owner exist). Only skills whose page is confirmed
+// may be auto-filed under a creator; otherwise we can't say who the skill belongs to, so
+// it stays unfiled. Confirmed URLs persist (UserDefaults); 404s/errors stay in memory so
+// a renamed path or flaky network can re-resolve on a future launch. Checks are capped at
+// a few concurrent requests so a large library doesn't hammer GitHub.
 final class GitHubVerifier {
     static let shared = GitHubVerifier()
-    private let key = "verifiedRepoSourcesV1"
+    private let key = "verifiedPagesV1"
     private var verified: Set<String>
     private var notFound: Set<String> = []
     private var inflight: Set<String> = []
+    private var queued: [(String, () -> Void)] = []
+    private let maxInflight = 5
 
     init() { verified = Set(UserDefaults.standard.stringArray(forKey: key) ?? []) }
 
-    /// true = repo exists, false = confirmed missing (404), nil = not checked yet.
-    func status(_ source: String) -> Bool? {
-        if verified.contains(source) { return true }
-        if notFound.contains(source) { return false }
+    /// true = page exists, false = confirmed missing (404), nil = not checked yet.
+    func status(_ urlString: String) -> Bool? {
+        if verified.contains(urlString) { return true }
+        if notFound.contains(urlString) { return false }
         return nil
     }
 
-    /// HEAD-check the repo; calls back on the main queue once resolved (or immediately
-    /// if already known / not a real owner/repo). Must be called on the main queue.
-    func verify(_ source: String, completion: @escaping () -> Void) {
-        if status(source) != nil { completion(); return }
-        guard source.contains("/"), let url = URL(string: "https://github.com/\(source)") else {
-            notFound.insert(source); completion(); return
+    /// HEAD-check the URL (throttled); calls back on the main queue once resolved (or
+    /// immediately if already known). Must be called on the main queue.
+    func verify(_ urlString: String, completion: @escaping () -> Void) {
+        if status(urlString) != nil { completion(); return }
+        queued.append((urlString, completion))
+        pump()
+    }
+
+    private func pump() {
+        while inflight.count < maxInflight, !queued.isEmpty {
+            let (s, done) = queued.removeFirst()
+            if status(s) != nil || inflight.contains(s) { done(); continue }
+            start(s, done)
         }
-        if inflight.contains(source) { return }
-        inflight.insert(source)
-        var req = URLRequest(url: url, timeoutInterval: 10)
+    }
+
+    private func start(_ s: String, _ completion: @escaping () -> Void) {
+        guard let url = URL(string: s) else { notFound.insert(s); completion(); return }
+        inflight.insert(s)
+        var req = URLRequest(url: url, timeoutInterval: 12)
         req.httpMethod = "HEAD"
         URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
-                self.inflight.remove(source)
+                self.inflight.remove(s)
                 if let code = (resp as? HTTPURLResponse)?.statusCode {
                     if code == 200 {
-                        self.verified.insert(source)
+                        self.verified.insert(s)
                         UserDefaults.standard.set(Array(self.verified), forKey: self.key)
                     } else if code == 404 || code == 451 {
-                        self.notFound.insert(source)
+                        self.notFound.insert(s)
                     }   // rate-limit / 5xx / transient: leave unknown, retry next launch
                 }
                 completion()
+                self.pump()
             }
         }.resume()
     }
@@ -3180,23 +3194,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     }
 
     private var recatWork: DispatchWorkItem?
-    /// Categorize with what GitHub verification already knows, then HEAD-check any
-    /// unverified `owner/repo` sources in the background and re-categorize as they
-    /// resolve (a skill slides from the home page into its creator's folder once
-    /// confirmed). Unverifiable sources stay unfiled at root.
+    /// True once the skill's actual GitHub page has been confirmed to exist.
+    private func skillVerified(_ s: Skill) -> Bool {
+        guard let u = s.skillGithubURL?.absoluteString else { return false }
+        return GitHubVerifier.shared.status(u) == true
+    }
+    /// Categorize with what GitHub verification already knows, then HEAD-check the page
+    /// of any not-yet-verified skill in the background and re-categorize as they resolve
+    /// (a skill slides from the home page into its creator's folder once its page is
+    /// confirmed). Skills whose page can't be verified stay unfiled at root.
     private func verifyAndCategorize() {
-        let verified: (String) -> Bool = { GitHubVerifier.shared.status($0) == true }
-        folders.autoCategorize(store.skills, isVerified: verified)
-        let sources = Set(store.skills.map { $0.source }.filter { $0.contains("/") })
-        for src in sources where GitHubVerifier.shared.status(src) == nil {
-            GitHubVerifier.shared.verify(src) { [weak self] in self?.scheduleRecategorize() }
+        folders.autoCategorize(store.skills, isVerified: skillVerified)
+        for s in store.skills {
+            guard let u = s.skillGithubURL?.absoluteString, GitHubVerifier.shared.status(u) == nil else { continue }
+            GitHubVerifier.shared.verify(u) { [weak self] in self?.scheduleRecategorize() }
         }
     }
     private func scheduleRecategorize() {
         recatWork?.cancel()
         let w = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
-            self.folders.autoCategorize(self.store.skills) { GitHubVerifier.shared.status($0) == true }
+            self.folders.autoCategorize(self.store.skills, isVerified: self.skillVerified)
             self.model?.bumpReload()
             self.popoverController?.reload()
         }
