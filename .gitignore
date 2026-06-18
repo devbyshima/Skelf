@@ -1,5 +1,6 @@
 # Build output
 Skelf.app/
+*.dmg
 *.swiftmodule
 *.swiftdoc
 *.o
