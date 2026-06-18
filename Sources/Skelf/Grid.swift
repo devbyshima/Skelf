@@ -230,7 +230,9 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
         else if favChanged { refreshFavorites() }
     }
 
-    func reload() { buildEntries(); collectionView.reloadData() }
+    // Clear any hover tip first: reloadData() tears down items without firing mouseExited,
+    // so a tip for a card that's about to vanish could otherwise stay stuck on screen.
+    func reload() { SkillHoverTip.shared.cancel(); buildEntries(); collectionView.reloadData() }
 
     /// Update only the favorite stars on visible cards — no reorder, no reload (so the
     /// card that was just tapped keeps its in-place pop animation).

@@ -373,7 +373,10 @@ final class SkillGridItem: NSCollectionViewItem {
         setFavorite(isFavorite, animated: false)
         setCopyTitle("Copy")
         view.alphaValue = skill.enabled ? 1.0 : 0.62
-        resetHover()                        // the hover info is now a Liquid Glass tip (no system tooltip)
+        // The slash command is no longer in a system tooltip; expose it to VoiceOver on the
+        // button that copies it (name + description stay readable as the visible labels).
+        copyButton.setAccessibilityHelp("Copies \(skill.initiator) to the clipboard")
+        resetHover()                        // the hover info is now a Liquid Glass tip
     }
 
     /// Update the star, optionally with a springy pop (used when the user toggles it).

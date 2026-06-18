@@ -39,7 +39,9 @@ The app is one SwiftPM target split into focused files under `Sources/Skelf/`:
 | `Grid.swift` | collection view, adaptive flow layout, grid controller |
 | `Navigation.swift` | SwiftUI shell, observable model, Settings, representables |
 | `MenuBar.swift` | menu-bar popover, toast, painting panel, controls |
+| `HoverTip.swift` | shared Liquid Glass hover tip shown over skill cards |
 | `App.swift` | AppDelegate, status item, menus, `@main` entry |
+| `Bundle+Skelf.swift` | resource-bundle resolver (`Bundle.module` vs `Bundle.main`) |
 
 Runtime resources (`art-map.json`, `skelf.svg`) live in `Sources/Skelf/Resources/` and are
 loaded via `skelfResourceBundle` so both SwiftPM (`Bundle.module`) and `build.sh`

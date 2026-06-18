@@ -25,7 +25,8 @@ swift build                     # SwiftPM build
 - **Grid of cards** — each skill is a portrait card backed by a **unique public-domain
   painting** (Art Institute of Chicago, bundled `art-map.json`, disk-cached), with a
   generated gradient+icon fallback when offline or unmapped. Cards reflow to any width,
-  scale on hover, squash on press; a click opens the detail.
+  scale on hover, squash on press; a click opens the detail. Resting on a card shows a
+  minimal **Liquid Glass hover tip** (name, slash command, creator).
 - **Auto-organized by creator** — skills group into a folder per `owner` automatically when
   that owner has ≥ 2 installed skills; singletons stay loose. Folder tiles show the
   creator's GitHub avatar. Make your own folders too (display-only — never touches Claude's

@@ -235,7 +235,7 @@ final class ArtStore {
             var req = URLRequest(url: url)
             req.setValue("Skelf/1.0 (skill art)", forHTTPHeaderField: "User-Agent")
             // The Art Institute of Chicago's IIIF image server requires this header (else 403).
-            req.setValue("Skelf macOS (fulltimestudio29@gmail.com)", forHTTPHeaderField: "AIC-User-Agent")
+            req.setValue("Skelf (https://github.com/devbyshima/Skelf)", forHTTPHeaderField: "AIC-User-Agent")
             URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
@@ -268,7 +268,7 @@ final class ArtStore {
             .init(name: "limit", value: "40")]
         guard let url = comp.url else { done(nil); return }
         var req = URLRequest(url: url)
-        req.setValue("Skelf macOS (fulltimestudio29@gmail.com)", forHTTPHeaderField: "AIC-User-Agent")
+        req.setValue("Skelf (https://github.com/devbyshima/Skelf)", forHTTPHeaderField: "AIC-User-Agent")
         URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
             guard let self = self else { return }
             var pick: (id: String, title: String, artist: String)?
