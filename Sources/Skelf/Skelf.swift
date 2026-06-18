@@ -2319,12 +2319,36 @@ final class ToastWindow: NSPanel {
     }
     override var canBecomeKey: Bool { false }
 
+    /// Toast with an Undo button (used after a drop).
     func present(message: String, below popover: NSWindow, onUndo: @escaping () -> Void) {
         self.onUndo = onUndo
+        undoBtn.isHidden = false
+        iconView.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)
+        iconView.contentTintColor = .systemGreen
         label.stringValue = message
-        let font = label.font ?? NSFont.systemFont(ofSize: 12.5)
-        let labelW = ceil((message as NSString).size(withAttributes: [.font: font]).width)
+        let labelW = labelWidth(message)
         let w = min(max(220, 15 + 16 + 9 + labelW + 14 + 46 + 13), popover.frame.width)
+        animateIn(width: w, below: popover, dismissAfter: 4.0)
+    }
+
+    /// Plain message toast (no Undo) — e.g. "Copied /name".
+    func presentMessage(_ message: String, icon: String, below popover: NSWindow) {
+        onUndo = nil
+        undoBtn.isHidden = true
+        iconView.image = NSImage(systemSymbolName: icon, accessibilityDescription: nil)
+        iconView.contentTintColor = .systemGreen
+        label.stringValue = message
+        let labelW = labelWidth(message)
+        let w = min(max(170, 15 + 16 + 9 + labelW + 16), max(170, popover.frame.width))
+        animateIn(width: w, below: popover, dismissAfter: 1.8)
+    }
+
+    private func labelWidth(_ s: String) -> CGFloat {
+        let font = label.font ?? NSFont.systemFont(ofSize: 12.5)
+        return ceil((s as NSString).size(withAttributes: [.font: font]).width)
+    }
+
+    private func animateIn(width w: CGFloat, below popover: NSWindow, dismissAfter: TimeInterval) {
         let h: CGFloat = 46
         let pf = popover.frame
         let x = pf.midX - w / 2
@@ -2353,7 +2377,7 @@ final class ToastWindow: NSPanel {
 
         let work = DispatchWorkItem { [weak self] in self?.dismiss() }
         dismissWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + dismissAfter, execute: work)
     }
 
     func dismiss() {
@@ -2523,6 +2547,14 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         let tw = toastWindow ?? ToastWindow()
         toastWindow = tw
         tw.present(message: message, below: pop) { [weak self] in self?.onUndo?() }
+    }
+
+    /// "Copied /name" confirmation toast (no Undo) shown when you copy from the menu bar.
+    private func showCopiedToast(_ skill: Skill) {
+        guard let pop = view.window else { return }
+        let tw = toastWindow ?? ToastWindow()
+        toastWindow = tw
+        tw.presentMessage("Copied \(skill.initiator)", icon: "checkmark.circle.fill", below: pop)
     }
 
     /// The toast lives with the menu — when the popover collapses, so does the toast.
@@ -2704,6 +2736,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         copyBtn.heightAnchor.constraint(equalToConstant: 24).isActive = true
         copyBtn.onAction = { [weak self, weak copyBtn] in
             self?.onCopy?(skill)
+            self?.showCopiedToast(skill)                                        // toast: "Copied /name"
             copyBtn?.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Copied")
             copyBtn?.contentTintColor = .systemGreen
             springPop(copyBtn?.layer, from: 0.4, damping: 10, stiffness: 360)   // the copy confirmation pops, not the menu bar
