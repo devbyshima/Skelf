@@ -1871,35 +1871,98 @@ final class GridCollectionView: NSCollectionView {
     }
 }
 
-// Sizes cards so a fixed grid (4 columns × ~3 visible rows) fills the viewport at any
-// window size — recomputed live as the window resizes (width via shouldInvalidateLayout,
-// height via the controller's viewDidLayout) so the cards adapt instantly.
-final class CardFlowLayout: NSCollectionViewFlowLayout {
-    var columns: CGFloat = 4
-    var visibleRows: CGFloat = 3
-    override init() {
-        super.init()
-        itemSize = NSSize(width: 200, height: 168)
-        minimumInteritemSpacing = 14
-        minimumLineSpacing = 14
-        sectionInset = NSEdgeInsets(top: 4, left: 18, bottom: 16, right: 18)
-        headerReferenceSize = NSSize(width: 0, height: 28)
+// Lays cards out in a fixed number of columns (4), each a PORTRAIT rectangle (height
+// derived from width by the original 300:224 ratio). Card width = viewport/columns, so
+// the cards shrink/grow with the window — recomputed live (shouldInvalidateLayout on
+// width change) so they adapt instantly.
+// A fully custom grid layout. We DON'T subclass NSCollectionViewFlowLayout because, when
+// hosted inside a SwiftUI NavigationStack, the flow layout derives its column count from a
+// stale (tiny) measurement width and never recovers it — even a fresh instance at the real
+// 920pt width still wrapped after 2 columns. This layout positions every item/header frame
+// itself from the live clip width, so the column count truly flows with the window.
+final class CardFlowLayout: NSCollectionViewLayout {
+    static let aspect: CGFloat = 300.0 / 224.0   // height / width — portrait
+    // The column count is NOT fixed: it flows with the window. We aim each card at
+    // ~targetWidth, fit as many whole columns as the available width allows (never below
+    // minWidth), then share the slack so the row fills evenly. Cards stay portrait.
+    static let targetWidth: CGFloat = 210
+    static let minWidth: CGFloat = 150
+    let interitem: CGFloat = 14
+    let lineSpacing: CGFloat = 16
+    let inset = NSEdgeInsets(top: 4, left: 18, bottom: 16, right: 18)
+    let headerHeight: CGFloat = 30
+
+    private var itemAttrs: [IndexPath: NSCollectionViewLayoutAttributes] = [:]
+    private var headerAttrs: [IndexPath: NSCollectionViewLayoutAttributes] = [:]
+    private var contentSize: NSSize = .zero
+    private var lastWidth: CGFloat = 0
+
+    private func layoutWidth(_ cv: NSCollectionView) -> CGFloat {
+        // The scroll view's visible (clip) width is the true width; the documentView's own
+        // bounds is content-driven and unreliable here.
+        cv.enclosingScrollView?.contentView.bounds.width ?? cv.bounds.width
     }
-    required init?(coder: NSCoder) { super.init(coder: coder) }
+
     override func prepare() {
-        if let cv = collectionView, cv.bounds.width > 1 {
-            let vpW = cv.bounds.width                                   // = scroll content (clip) width
-            let vpH = cv.enclosingScrollView?.contentView.bounds.height ?? (vpW * 0.6)
-            let w = floor((vpW - sectionInset.left - sectionInset.right - (columns - 1) * minimumInteritemSpacing) / columns)
-            let usableH = vpH - headerReferenceSize.height - sectionInset.top - sectionInset.bottom - (visibleRows - 1) * minimumLineSpacing
-            let h = floor(usableH / visibleRows)
-            itemSize = NSSize(width: max(120, w), height: max(118, min(h, w * 1.3)))
-        }
         super.prepare()
+        itemAttrs.removeAll(keepingCapacity: true)
+        headerAttrs.removeAll(keepingCapacity: true)
+        guard let cv = collectionView else { contentSize = .zero; return }
+        let width = layoutWidth(cv)
+        lastWidth = width
+        guard width > 1 else { contentSize = NSSize(width: max(width, 1), height: 0); return }
+
+        let avail = width - inset.left - inset.right
+        var cols = max(1, floor((avail + interitem) / (CardFlowLayout.targetWidth + interitem)))
+        while cols > 1 && floor((avail - (cols - 1) * interitem) / cols) < CardFlowLayout.minWidth { cols -= 1 }
+        let colsI = max(1, Int(cols))
+        let itemW = floor((avail - CGFloat(colsI - 1) * interitem) / CGFloat(colsI))
+        let itemH = floor(itemW * CardFlowLayout.aspect)
+
+        var y: CGFloat = 0
+        for s in 0..<cv.numberOfSections {
+            let count = cv.numberOfItems(inSection: s)
+            let hip = IndexPath(item: 0, section: s)
+            let h = NSCollectionViewLayoutAttributes(forSupplementaryViewOfKind: NSCollectionView.elementKindSectionHeader, with: hip)
+            h.frame = NSRect(x: 0, y: y, width: width, height: headerHeight)
+            headerAttrs[hip] = h
+            y += headerHeight + inset.top
+
+            for i in 0..<count {
+                let row = i / colsI, col = i % colsI
+                let x = inset.left + CGFloat(col) * (itemW + interitem)
+                let iy = y + CGFloat(row) * (itemH + lineSpacing)
+                let ip = IndexPath(item: i, section: s)
+                let a = NSCollectionViewLayoutAttributes(forItemWith: ip)
+                a.frame = NSRect(x: x, y: iy, width: itemW, height: itemH)
+                itemAttrs[ip] = a
+            }
+            let rows = count == 0 ? 0 : (count + colsI - 1) / colsI
+            if rows > 0 { y += CGFloat(rows) * itemH + CGFloat(rows - 1) * lineSpacing }
+            y += inset.bottom
+        }
+        contentSize = NSSize(width: width, height: y)
     }
+
+    override var collectionViewContentSize: NSSize { contentSize }
+
+    override func layoutAttributesForElements(in rect: NSRect) -> [NSCollectionViewLayoutAttributes] {
+        var out: [NSCollectionViewLayoutAttributes] = []
+        for (_, a) in headerAttrs where a.frame.intersects(rect) { out.append(a) }
+        for (_, a) in itemAttrs where a.frame.intersects(rect) { out.append(a) }
+        return out
+    }
+    override func layoutAttributesForItem(at indexPath: IndexPath) -> NSCollectionViewLayoutAttributes? {
+        itemAttrs[indexPath]
+    }
+    override func layoutAttributesForSupplementaryView(ofKind elementKind: NSCollectionView.SupplementaryElementKind,
+                                                       at indexPath: IndexPath) -> NSCollectionViewLayoutAttributes? {
+        elementKind == NSCollectionView.elementKindSectionHeader ? headerAttrs[indexPath] : nil
+    }
+    // Re-lay-out only when the visible width changes (not on vertical scroll).
     override func shouldInvalidateLayout(forBoundsChange newBounds: NSRect) -> Bool {
-        if let cv = collectionView, newBounds.width != cv.bounds.width { return true }
-        return super.shouldInvalidateLayout(forBoundsChange: newBounds)
+        guard let cv = collectionView else { return false }
+        return abs(layoutWidth(cv) - lastWidth) > 0.5
     }
 }
 
@@ -1982,13 +2045,18 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
 
     override func viewDidLoad() { super.viewDidLoad(); reload() }
 
-    // Card width adapts via the layout's shouldInvalidateLayout (width change); card
-    // HEIGHT depends on the viewport height, so re-invalidate when the view resizes.
-    private var lastViewportH: CGFloat = 0
+    // Cards are portrait and the column count flows with the window width. CardFlowLayout
+    // computes item frames from the live clip width, so re-invalidate when that changes
+    // (the SwiftUI host's initial tiny measurement pass means the first layout can land at
+    // the wrong width otherwise).
+    private var lastViewportW: CGFloat = 0
     override func viewDidLayout() {
         super.viewDidLayout()
-        let h = gridScroll.contentView.bounds.height
-        if abs(h - lastViewportH) > 0.5 { lastViewportH = h; collectionView.collectionViewLayout?.invalidateLayout() }
+        let w = gridScroll.contentView.bounds.width
+        if abs(w - lastViewportW) > 0.5 {
+            lastViewportW = w
+            collectionView.collectionViewLayout?.invalidateLayout()
+        }
     }
 
     /// Called by the SwiftUI host whenever search / data changes. (CardFlowLayout
