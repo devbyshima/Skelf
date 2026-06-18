@@ -956,6 +956,29 @@ private extension CGImage {
     }
 }
 
+// A small rounded thumbnail for menu-bar popover rows (a skill's painting, or a folder's
+// creator avatar) — same art the grid cards use, shrunk to a 30pt square.
+final class RowThumb: NSView {
+    private let img = CALayer()
+    override init(frame f: NSRect) {
+        super.init(frame: f)
+        wantsLayer = true
+        layer?.cornerRadius = 7
+        layer?.masksToBounds = true
+        layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
+        img.contentsGravity = .resizeAspectFill
+        img.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        layer?.addSublayer(img)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func layout() { super.layout(); img.frame = bounds }
+    func setCG(_ c: CGImage?) { img.contents = c }
+    func setImage(_ image: NSImage) {
+        var r = CGRect(origin: .zero, size: image.size)
+        img.contents = image.cgImage(forProposedRect: &r, context: nil, hints: nil)
+    }
+}
+
 // The card's root view: rounded, with a soft drop shadow that fades in on hover.
 final class CardRootView: NSView {
     var corner: CGFloat = 22
@@ -3121,9 +3144,44 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
             }
         }
         let sub = skill.enabled ? skill.initiator : "\(skill.initiator)  ·  off"
-        let row = makeRow(icon: monogram(skill), title: skill.name, subtitle: sub, dim: !skill.enabled,
+        let row = makeRow(icon: skillThumb(skill), title: skill.name, subtitle: sub, dim: !skill.enabled,
                           trailing: copyBtn) { [weak self] in self?.onOpen?(skill) }
         return row
+    }
+
+    // The little square shows the skill's own painting (same as its grid card), with the
+    // generated themed art as the instant fallback while the painting downloads.
+    private func skillThumb(_ skill: Skill) -> NSView {
+        let t = RowThumb()
+        t.translatesAutoresizingMaskIntoConstraints = false
+        t.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        t.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        if let img = ArtStore.shared.cached(skill.id) { t.setImage(img) }
+        else {
+            t.setCG(SkillArtView.themedImage(skill))
+            ArtStore.shared.fetch(skill.id) { [weak t] img in
+                guard let t = t, let img = img else { return }; t.setImage(img)
+            }
+        }
+        t.alphaValue = skill.enabled ? 1.0 : 0.5
+        return t
+    }
+
+    // Creator folders show the creator's GitHub avatar; user folders keep the folder glyph.
+    private func folderThumb(_ node: FolderStore.Node) -> NSView {
+        guard let creator = node.autoCreator else { return folderIcon() }
+        let t = RowThumb()
+        t.translatesAutoresizingMaskIntoConstraints = false
+        t.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        t.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        if let img = AvatarStore.shared.cached(creator) { t.setImage(img) }
+        else {
+            t.setCG(SkillArtView.gradientImage(node.name, monogram: true))
+            AvatarStore.shared.fetch(creator) { [weak t] img in
+                guard let t = t, let img = img else { return }; t.setImage(img)
+            }
+        }
+        return t
     }
 
     private func folderRow(_ node: FolderStore.Node) -> NSView {
@@ -3138,35 +3196,9 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         var parts: [String] = []
         if f > 0 { parts.append("\(f) folder\(f == 1 ? "" : "s")") }
         parts.append("\(s) skill\(s == 1 ? "" : "s")")
-        let row = makeRow(icon: folderIcon(), title: node.name, subtitle: parts.joined(separator: " · "),
+        let row = makeRow(icon: folderThumb(node), title: node.name, subtitle: parts.joined(separator: " · "),
                           dim: false, trailing: chev) { [weak self] in self?.enter(node.id) }
         return row
-    }
-
-    private func monogram(_ skill: Skill) -> NSView {
-        let box = NSView()
-        box.wantsLayer = true
-        box.layer?.cornerRadius = 7
-        box.translatesAutoresizingMaskIntoConstraints = false
-        box.widthAnchor.constraint(equalToConstant: 30).isActive = true
-        box.heightAnchor.constraint(equalToConstant: 30).isActive = true
-        let g = CAGradientLayer()
-        g.frame = CGRect(x: 0, y: 0, width: 30, height: 30)
-        g.cornerRadius = 7
-        g.colors = Palette.gradientColors(skill.name)
-        g.startPoint = CGPoint(x: 0, y: 0)
-        g.endPoint = CGPoint(x: 1, y: 1)
-        box.layer?.addSublayer(g)
-        let lbl = NSTextField(labelWithString: Palette.initials(skill.name))
-        lbl.font = .systemFont(ofSize: 12, weight: .bold)
-        lbl.textColor = .white
-        lbl.alignment = .center
-        lbl.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(lbl)
-        lbl.centerXAnchor.constraint(equalTo: box.centerXAnchor).isActive = true
-        lbl.centerYAnchor.constraint(equalTo: box.centerYAnchor).isActive = true
-        box.alphaValue = skill.enabled ? 1.0 : 0.5
-        return box
     }
 
     private func folderIcon() -> NSView {
