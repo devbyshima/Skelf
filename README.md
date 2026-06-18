@@ -45,9 +45,10 @@ open Skelf.app        # launch (dock icon + window + menu-bar icon)
   the popover with a bounce** (its own `NSPanel`), and dismisses with the popover (it's
   tied to the menu's lifecycle via `NSPopoverDelegate`).
 - **Grid** — the current folder's contents: sub-folder tiles + skill tiles (gradient
-  monogram, name, `/initiator`). Disabled skills are dimmed. Tiles **lift on hover**;
-  grid ↔ detail **crossfades**. Search + All / Enabled / Off filter. The window bottom
-  is clean (no status footer).
+  monogram, name, `/initiator`). Disabled skills are dimmed. Tiles **lift on hover** and
+  **squash-and-stretch on press** (`CASpringAnimation`); selecting a skill **morphs**
+  into its detail (spring scale + fade). Search + All / Enabled / Off filter. The window
+  bottom is clean (no status footer).
 - **Detail screen** — click a tile to open it: big monogram, enabled/off status, a
   prominent **Copy `/name`** button rendered as an **interactive Liquid Glass pill**
   (`NSGlassEffectView` with `effectIsInteractive` — it bounces on click), ★ Favorite,
