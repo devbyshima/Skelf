@@ -2439,7 +2439,7 @@ final class CardFlowLayout: NSCollectionViewLayout {
     let interitem: CGFloat = 14
     let lineSpacing: CGFloat = 16
     let inset = NSEdgeInsets(top: 4, left: 18, bottom: 16, right: 18)
-    let headerHeight: CGFloat = 30
+    let headerHeight: CGFloat = 38
 
     private var itemAttrs: [IndexPath: NSCollectionViewLayoutAttributes] = [:]
     private var headerAttrs: [IndexPath: NSCollectionViewLayoutAttributes] = [:]
@@ -2522,13 +2522,13 @@ final class SectionHeaderView: NSView {
     let label = NSTextField(labelWithString: "")
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.font = .systemFont(ofSize: 15, weight: .semibold)
         label.textColor = .secondaryLabelColor
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -7),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
