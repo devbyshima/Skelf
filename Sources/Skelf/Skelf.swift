@@ -758,7 +758,13 @@ final class AvatarStore {
 // their creator avatar (AvatarStore); only skill cards use this.
 final class ArtStore {
     static let shared = ArtStore()
-    struct Entry: Decodable { let url: String; let by: String?; let license: String? }
+    struct Entry: Decodable {
+        let url: String
+        let title: String?; let artist: String?; let date: String?; let why: String?
+        let by: String?; let license: String?
+    }
+    // What the banner popover shows about a skill's painting.
+    struct Details { let title: String; let artist: String; let date: String; let why: String; let license: String }
     private var map: [String: Entry] = [:]
     private var mem: [String: NSImage] = [:]
     private var failed: Set<String> = []
@@ -766,6 +772,7 @@ final class ArtStore {
     private var waiters: [String: [(NSImage) -> Void]] = [:]   // cards awaiting an in-flight download
     private var usedImages: Set<String> = []                   // AIC image ids already taken (dedup)
     private var runtimeAttribution: [String: String] = [:]     // skill id → "Title — Artist" for runtime picks
+    private var runtimeWhy: [String: String] = [:]             // skill id → why-this-painting (runtime)
     private let dir: URL
 
     init() {
@@ -801,12 +808,20 @@ final class ArtStore {
     }
 
     func hasArt(_ id: String) -> Bool { map[id] != nil }
-    func attribution(_ id: String) -> String? {
+
+    // Painting details for the banner popover (curated map, else a runtime pick).
+    func details(_ id: String) -> Details? {
         if let e = map[id] {
-            let parts = [e.by, e.license].compactMap { $0 }.filter { !$0.isEmpty }
-            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+            let title = e.title ?? e.by ?? "Untitled"
+            return Details(title: title, artist: e.artist ?? "Unknown", date: e.date ?? "",
+                           why: e.why ?? "", license: e.license ?? "Public domain · Art Institute of Chicago")
         }
-        if let by = runtimeAttribution[id] { return by + " · Public domain · Art Institute of Chicago" }
+        if let by = runtimeAttribution[id] {
+            let parts = by.components(separatedBy: " — ")
+            return Details(title: parts.first ?? by, artist: parts.count > 1 ? parts[1] : "Unknown",
+                           date: "", why: runtimeWhy[id] ?? "",
+                           license: "Public domain · Art Institute of Chicago")
+        }
         return nil
     }
 
@@ -882,10 +897,12 @@ final class ArtStore {
                 scan(paintingsOnly: true)
                 if pick == nil { scan(paintingsOnly: false) }   // accept any artwork if no painting
             }
+            let kw = artKeyword(for: skill)
             DispatchQueue.main.async {
                 guard let p = pick else { done(nil); return }
                 self.usedImages.insert(p.id)
                 self.runtimeAttribution[skill.id] = "\(p.title) — \(p.artist)"
+                self.runtimeWhy[skill.id] = "Chosen to match this skill — a public-domain artwork on the theme of “\(kw)”."
                 done(URL(string: "https://www.artic.edu/iiif/2/\(p.id)/full/843,/0/default.jpg"))
             }
         }.resume()
@@ -1738,7 +1755,7 @@ final class SkillDetailView: NSView {
     private let bannerStatus = NSTextField(labelWithString: "")
 
     private let summaryLabel = NSTextField(wrappingLabelWithString: "")
-    private let bodyLabel = NSTextField(wrappingLabelWithString: "")
+    private let bodyText = NSTextView()   // SKILL.md body — scrolls internally for big files
     private let sidebarStack = NSStackView()
 
     override init(frame frameRect: NSRect) {
@@ -1771,6 +1788,8 @@ final class SkillDetailView: NSView {
 
         banner.translatesAutoresizingMaskIntoConstraints = false
         addSubview(banner)
+        banner.toolTip = "Click for details about this painting"
+        banner.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(bannerClicked)))
         bannerName.font = .systemFont(ofSize: 24, weight: .bold)
         bannerName.textColor = .white
         bannerName.lineBreakMode = .byTruncatingTail
@@ -1794,37 +1813,28 @@ final class SkillDetailView: NSView {
         bodyRow.translatesAutoresizingMaskIntoConstraints = false
         addSubview(bodyRow)
 
-        // left: a Summary + the SKILL.md inside a GitHub-style README card (scrolls)
-        let leftScroll = NSScrollView()
-        leftScroll.translatesAutoresizingMaskIntoConstraints = false
-        leftScroll.hasVerticalScroller = true
-        leftScroll.drawsBackground = false
-        leftScroll.borderType = .noBorder
-        bodyRow.addSubview(leftScroll)
-        let leftClip = leftScroll.contentView
-        let leftDoc = FlippedView()
-        leftDoc.translatesAutoresizingMaskIntoConstraints = false
-        leftScroll.documentView = leftDoc
-        let leftStack = NSStackView()
-        leftStack.orientation = .vertical
-        leftStack.alignment = .leading
-        leftStack.spacing = 16
-        leftStack.translatesAutoresizingMaskIntoConstraints = false
-        leftDoc.addSubview(leftStack)
+        // left: a fixed Summary header above the SKILL.md, which lives in its OWN scrolling
+        // NSTextView — viewport layout keeps a big SKILL.md (e.g. humanizer's 34KB) fast to
+        // open and smooth to scroll (a single giant NSTextField laid the whole thing out up
+        // front, which was the open-lag and scroll-jank).
+        let leftBox = NSView()
+        leftBox.translatesAutoresizingMaskIntoConstraints = false
+        bodyRow.addSubview(leftBox)
 
-        // Summary block (the description, pinned above the README)
+        // Summary block (the description), pinned at the top.
         let summaryHeader = NSTextField(labelWithString: "SUMMARY")
         summaryHeader.font = .systemFont(ofSize: 11, weight: .semibold)
         summaryHeader.textColor = .secondaryLabelColor
+        summaryHeader.translatesAutoresizingMaskIntoConstraints = false
         summaryLabel.font = .systemFont(ofSize: 14.5)
         summaryLabel.textColor = .labelColor
         summaryLabel.translatesAutoresizingMaskIntoConstraints = false
         let summaryBlock = NSStackView(views: [summaryHeader, summaryLabel])
         summaryBlock.orientation = .vertical; summaryBlock.alignment = .leading; summaryBlock.spacing = 6
         summaryBlock.translatesAutoresizingMaskIntoConstraints = false
-        leftStack.addArrangedSubview(summaryBlock)
+        leftBox.addSubview(summaryBlock)
 
-        // GitHub-style README card: bordered, with a file-header bar, then the rendered body
+        // GitHub-style README card: bordered, file-header bar, then the body in a scroll view.
         let readmeCard = NSView()
         readmeCard.wantsLayer = true
         readmeCard.layer?.cornerRadius = 8
@@ -1833,6 +1843,7 @@ final class SkillDetailView: NSView {
         readmeCard.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
         readmeCard.layer?.masksToBounds = true
         readmeCard.translatesAutoresizingMaskIntoConstraints = false
+        leftBox.addSubview(readmeCard)
         let hdr = NSView()
         hdr.wantsLayer = true
         hdr.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
@@ -1849,22 +1860,41 @@ final class SkillDetailView: NSView {
         hdrDivider.translatesAutoresizingMaskIntoConstraints = false
         hdr.addSubview(hdrIcon); hdr.addSubview(hdrLabel)
         readmeCard.addSubview(hdr); readmeCard.addSubview(hdrDivider)
-        bodyLabel.isSelectable = true
-        bodyLabel.translatesAutoresizingMaskIntoConstraints = false
-        readmeCard.addSubview(bodyLabel)
-        leftStack.addArrangedSubview(readmeCard)
+
+        // the rendered SKILL.md, in its own scroll view (NSTextView document = lazy layout)
+        let bodyScroll = NSScrollView()
+        bodyScroll.translatesAutoresizingMaskIntoConstraints = false
+        bodyScroll.hasVerticalScroller = true
+        bodyScroll.autohidesScrollers = true
+        bodyScroll.scrollerStyle = .overlay
+        bodyScroll.drawsBackground = false
+        bodyScroll.borderType = .noBorder
+        readmeCard.addSubview(bodyScroll)
+        bodyText.isEditable = false
+        bodyText.isSelectable = true
+        bodyText.drawsBackground = false
+        bodyText.textContainerInset = NSSize(width: 18, height: 16)
+        bodyText.minSize = NSSize(width: 0, height: 0)
+        bodyText.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        bodyText.isVerticallyResizable = true
+        bodyText.isHorizontallyResizable = false
+        bodyText.autoresizingMask = [.width]
+        bodyText.textContainer?.widthTracksTextView = true
+        bodyText.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        bodyText.layoutManager?.allowsNonContiguousLayout = true
+        bodyText.linkTextAttributes = [.foregroundColor: NSColor.linkColor,
+                                       .underlineStyle: NSUnderlineStyle.single.rawValue]
+        bodyScroll.documentView = bodyText
 
         NSLayoutConstraint.activate([
-            leftDoc.topAnchor.constraint(equalTo: leftClip.topAnchor),
-            leftDoc.leadingAnchor.constraint(equalTo: leftClip.leadingAnchor),
-            leftDoc.trailingAnchor.constraint(equalTo: leftClip.trailingAnchor),
-            leftDoc.widthAnchor.constraint(equalTo: leftClip.widthAnchor),
-            leftStack.topAnchor.constraint(equalTo: leftDoc.topAnchor, constant: 20),
-            leftStack.leadingAnchor.constraint(equalTo: leftDoc.leadingAnchor, constant: 24),
-            leftStack.trailingAnchor.constraint(equalTo: leftDoc.trailingAnchor, constant: -22),
-            leftStack.bottomAnchor.constraint(equalTo: leftDoc.bottomAnchor, constant: -24),
-            summaryBlock.widthAnchor.constraint(equalTo: leftStack.widthAnchor),
-            readmeCard.widthAnchor.constraint(equalTo: leftStack.widthAnchor),
+            summaryBlock.topAnchor.constraint(equalTo: leftBox.topAnchor, constant: 20),
+            summaryBlock.leadingAnchor.constraint(equalTo: leftBox.leadingAnchor, constant: 24),
+            summaryBlock.trailingAnchor.constraint(equalTo: leftBox.trailingAnchor, constant: -22),
+
+            readmeCard.topAnchor.constraint(equalTo: summaryBlock.bottomAnchor, constant: 16),
+            readmeCard.leadingAnchor.constraint(equalTo: leftBox.leadingAnchor, constant: 24),
+            readmeCard.trailingAnchor.constraint(equalTo: leftBox.trailingAnchor, constant: -22),
+            readmeCard.bottomAnchor.constraint(equalTo: leftBox.bottomAnchor, constant: -20),
 
             hdr.topAnchor.constraint(equalTo: readmeCard.topAnchor),
             hdr.leadingAnchor.constraint(equalTo: readmeCard.leadingAnchor),
@@ -1878,10 +1908,11 @@ final class SkillDetailView: NSView {
             hdrDivider.topAnchor.constraint(equalTo: hdr.bottomAnchor),
             hdrDivider.leadingAnchor.constraint(equalTo: readmeCard.leadingAnchor),
             hdrDivider.trailingAnchor.constraint(equalTo: readmeCard.trailingAnchor),
-            bodyLabel.topAnchor.constraint(equalTo: hdrDivider.bottomAnchor, constant: 18),
-            bodyLabel.leadingAnchor.constraint(equalTo: readmeCard.leadingAnchor, constant: 20),
-            bodyLabel.trailingAnchor.constraint(equalTo: readmeCard.trailingAnchor, constant: -20),
-            bodyLabel.bottomAnchor.constraint(equalTo: readmeCard.bottomAnchor, constant: -22),
+
+            bodyScroll.topAnchor.constraint(equalTo: hdrDivider.bottomAnchor),
+            bodyScroll.leadingAnchor.constraint(equalTo: readmeCard.leadingAnchor),
+            bodyScroll.trailingAnchor.constraint(equalTo: readmeCard.trailingAnchor),
+            bodyScroll.bottomAnchor.constraint(equalTo: readmeCard.bottomAnchor),
         ])
 
         // right: sticky sidebar (own scroll)
@@ -1936,10 +1967,10 @@ final class SkillDetailView: NSView {
             bodyRow.trailingAnchor.constraint(equalTo: trailingAnchor),
             bodyRow.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            leftScroll.topAnchor.constraint(equalTo: bodyRow.topAnchor),
-            leftScroll.leadingAnchor.constraint(equalTo: bodyRow.leadingAnchor),
-            leftScroll.bottomAnchor.constraint(equalTo: bodyRow.bottomAnchor),
-            leftScroll.trailingAnchor.constraint(equalTo: sidebarScroll.leadingAnchor),
+            leftBox.topAnchor.constraint(equalTo: bodyRow.topAnchor),
+            leftBox.leadingAnchor.constraint(equalTo: bodyRow.leadingAnchor),
+            leftBox.bottomAnchor.constraint(equalTo: bodyRow.bottomAnchor),
+            leftBox.trailingAnchor.constraint(equalTo: sidebarScroll.leadingAnchor),
 
             sidebarScroll.topAnchor.constraint(equalTo: bodyRow.topAnchor),
             sidebarScroll.bottomAnchor.constraint(equalTo: bodyRow.bottomAnchor),
@@ -2030,29 +2061,112 @@ final class SkillDetailView: NSView {
         bannerStatus.stringValue = skill.enabled ? "● Enabled" : "○ Installed · off"
         bannerStatus.textColor = skill.enabled ? NSColor.systemGreen : NSColor.white.withAlphaComponent(0.8)
 
-        // left column: Summary + the GitHub-style SKILL.md card. Reading the file and
-        // rendering the markdown are the expensive bits — do them OFF the main thread so the
-        // navigation push animates smoothly, then swap the body in (this was the click lag).
+        // left column: Summary + the GitHub-style SKILL.md card. The body NSTextView lays out
+        // lazily (viewport), so a cached render shows instantly; otherwise read+render OFF the
+        // main thread (the navigation push stays smooth) and swap it in, caching for re-opens.
         summaryLabel.stringValue = skill.description.isEmpty ? "No description in SKILL.md." : skill.description
-        bodyLabel.attributedStringValue = NSAttributedString(string: "Loading…",
-            attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.tertiaryLabelColor])
-        let mdPath = skill.skillMDPath
         let sid = skill.id
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let raw = (try? String(contentsOfFile: mdPath, encoding: .utf8)) ?? ""
-            let (_, body) = splitFrontmatter(raw)
-            let bodyTrim = body.trimmingCharacters(in: .whitespacesAndNewlines)
-            let attr = bodyTrim.isEmpty
-                ? NSAttributedString(string: "This skill's SKILL.md has no content beyond its frontmatter.",
-                                     attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor])
-                : renderGitHubMarkdown(bodyTrim)
-            DispatchQueue.main.async {
-                guard let self = self, self.skill?.id == sid else { return }   // still this skill
-                self.bodyLabel.attributedStringValue = attr
+        if let cached = Self.mdCache[sid] {
+            setBody(cached)
+        } else {
+            setBody(NSAttributedString(string: "Loading…",
+                attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.tertiaryLabelColor]))
+            let mdPath = skill.skillMDPath
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let raw = (try? String(contentsOfFile: mdPath, encoding: .utf8)) ?? ""
+                let (_, body) = splitFrontmatter(raw)
+                let bodyTrim = body.trimmingCharacters(in: .whitespacesAndNewlines)
+                let attr = bodyTrim.isEmpty
+                    ? NSAttributedString(string: "This skill's SKILL.md has no content beyond its frontmatter.",
+                                         attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor])
+                    : renderGitHubMarkdown(bodyTrim)
+                DispatchQueue.main.async {
+                    Self.mdCache[sid] = attr
+                    guard let self = self, self.skill?.id == sid else { return }   // still this skill
+                    self.setBody(attr)
+                }
             }
         }
 
         rebuildSidebar(skill, isFavorite: isFavorite, creator: creator, token: token)
+    }
+
+    private static var mdCache: [String: NSAttributedString] = [:]
+    private func setBody(_ attr: NSAttributedString) {
+        bodyText.textStorage?.setAttributedString(attr)
+        bodyText.scroll(NSPoint(x: 0, y: 0))   // reset scroll to top for the new skill
+    }
+
+    // Clicking the banner painting → a native popover with the artwork's details + WHY it
+    // was chosen as this skill's cover.
+    private var paintingPopover: NSPopover?
+    @objc private func bannerClicked() {
+        guard let skill = skill else { return }
+        let vc = NSViewController()
+        vc.view = paintingCard(skill)
+        let pop = NSPopover()
+        pop.contentViewController = vc
+        pop.behavior = .transient
+        pop.contentSize = vc.view.fittingSize
+        pop.show(relativeTo: banner.bounds, of: banner, preferredEdge: .maxY)
+        paintingPopover = pop
+    }
+
+    private func paintingCard(_ skill: Skill) -> NSView {
+        let d = ArtStore.shared.details(skill.id)
+        let W: CGFloat = 340
+        let root = NSView()
+        root.translatesAutoresizingMaskIntoConstraints = false
+        root.widthAnchor.constraint(equalToConstant: W).isActive = true
+
+        let thumb = RowThumb()
+        thumb.translatesAutoresizingMaskIntoConstraints = false
+        thumb.layer?.cornerRadius = 9
+        thumb.widthAnchor.constraint(equalToConstant: 66).isActive = true
+        thumb.heightAnchor.constraint(equalToConstant: 66).isActive = true
+        if let img = ArtStore.shared.cached(skill.id) { thumb.setImage(img) }
+        else { thumb.setCG(SkillArtView.themedImage(skill)) }
+
+        func label(_ s: String, _ size: CGFloat, _ weight: NSFont.Weight, _ color: NSColor, wrap: Bool = false) -> NSTextField {
+            let l = wrap ? NSTextField(wrappingLabelWithString: s) : NSTextField(labelWithString: s)
+            l.font = .systemFont(ofSize: size, weight: weight); l.textColor = color
+            l.translatesAutoresizingMaskIntoConstraints = false
+            return l
+        }
+        let title = label(d?.title ?? "Generated cover art", 14, .bold, .labelColor, wrap: true)
+        let metaParts = [d?.artist, d?.date].compactMap { $0 }.filter { !$0.isEmpty }
+        let meta = label(metaParts.joined(separator: " · "), 12, .regular, .secondaryLabelColor, wrap: true)
+        let titleCol = NSStackView(views: meta.stringValue.isEmpty ? [title] : [title, meta])
+        titleCol.orientation = .vertical; titleCol.alignment = .leading; titleCol.spacing = 3
+        titleCol.translatesAutoresizingMaskIntoConstraints = false
+        let header = NSStackView(views: [thumb, titleCol])
+        header.orientation = .horizontal; header.alignment = .centerY; header.spacing = 12
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        let divider = NSBox(); divider.boxType = .separator; divider.translatesAutoresizingMaskIntoConstraints = false
+        let whyHdr = label("WHY THIS PAINTING", 10, .semibold, .tertiaryLabelColor)
+        let whyText = (d?.why).flatMap { $0.isEmpty ? nil : $0 }
+            ?? "This skill uses a generated cover (no museum painting was matched)."
+        let why = label(whyText, 13, .regular, .labelColor, wrap: true)
+        let lic = label(d?.license ?? "Generated artwork", 11, .regular, .tertiaryLabelColor, wrap: true)
+
+        let col = NSStackView(views: [header, divider, whyHdr, why, lic])
+        col.orientation = .vertical; col.alignment = .leading; col.spacing = 10
+        col.translatesAutoresizingMaskIntoConstraints = false
+        col.setCustomSpacing(8, after: whyHdr)
+        col.setCustomSpacing(14, after: why)
+        root.addSubview(col)
+        NSLayoutConstraint.activate([
+            col.topAnchor.constraint(equalTo: root.topAnchor, constant: 16),
+            col.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            col.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            col.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
+            divider.widthAnchor.constraint(equalTo: col.widthAnchor),
+            title.widthAnchor.constraint(lessThanOrEqualToConstant: W - 16 - 66 - 12 - 16),
+            why.widthAnchor.constraint(equalTo: col.widthAnchor),
+            lic.widthAnchor.constraint(equalTo: col.widthAnchor),
+        ])
+        return root
     }
 
     private func rebuildSidebar(_ skill: Skill, isFavorite: Bool, creator: String?, token: Int) {
@@ -3700,15 +3814,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             host.sceneBridgingOptions = [.title, .toolbars]
             // Create with an explicit frame, THEN attach the content VC, so the window
             // keeps 760×580 instead of collapsing to the content's fitting size.
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 920, height: 660),
+            let defaultSize = NSSize(width: 1200, height: 800)   // spacious 3:2 default (first launch)
+            let w = NSWindow(contentRect: NSRect(origin: .zero, size: defaultSize),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
                              backing: .buffered, defer: false)
             w.contentViewController = host
             w.title = "Skelf"
             w.minSize = NSSize(width: 680, height: 460)
             w.contentMinSize = NSSize(width: 680, height: 460)   // also floor the content size
-            w.setContentSize(NSSize(width: 920, height: 660))
+            w.setContentSize(defaultSize)
             w.center()
+            // Remember the user's resizes across launches; first launch uses defaultSize above.
+            w.setFrameAutosaveName("SkelfMainWindow")
             w.isReleasedWhenClosed = false
             w.delegate = self            // for windowWillReturnUndoManager
             window = w
