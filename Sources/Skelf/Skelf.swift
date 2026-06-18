@@ -68,51 +68,80 @@ struct Skill: Hashable {
 final class SkillStore {
     private(set) var skills: [Skill] = []
 
-    var base: URL {
-        if let override = ProcessInfo.processInfo.environment["SKILLS_DEV_DIR"], !override.isEmpty {
-            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
+    // A place skills can live. `installed` holds <id>/SKILL.md. If `enabled` is non-nil a
+    // skill is "on" only when <id> also exists there (the .agents↔.claude symlink installer);
+    // if nil, every skill found is on (the standard ~/.claude/skills directory).
+    struct Root { let installed: URL; let enabled: URL?; let lock: URL? }
+
+    // Skills can live in several places on a given machine; scan them all so the app works
+    // for any user without configuration. Order = metadata priority (first match wins).
+    static func discoverRoots() -> [Root] {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        func installer(_ baseDir: URL) -> Root {
+            Root(installed: baseDir.appendingPathComponent(".agents/skills"),
+                 enabled: baseDir.appendingPathComponent(".claude/skills"),
+                 lock: baseDir.appendingPathComponent("skills-lock.json"))
         }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Dev")
+        var roots: [Root] = []
+        if let ov = ProcessInfo.processInfo.environment["SKILLS_DEV_DIR"], !ov.isEmpty {
+            roots.append(installer(URL(fileURLWithPath: (ov as NSString).expandingTildeInPath)))
+        }
+        roots.append(installer(home.appendingPathComponent("Dev")))          // the `npx skills` installer layout
+        // Standard Claude Code skill directories (each skill present here is active):
+        roots.append(Root(installed: home.appendingPathComponent(".claude/skills"),
+                          enabled: nil, lock: home.appendingPathComponent(".claude/skills-lock.json")))
+        roots.append(Root(installed: home.appendingPathComponent(".config/claude/skills"), enabled: nil, lock: nil))
+        // …and the project the app was launched in, if any.
+        let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
+        roots.append(Root(installed: cwd.appendingPathComponent(".claude/skills"), enabled: nil, lock: nil))
+        return roots.filter { fm.fileExists(atPath: $0.installed.path) }
     }
-    var agentsDir: URL { base.appendingPathComponent(".agents/skills") }
-    var claudeDir: URL { base.appendingPathComponent(".claude/skills") }
+
+    // Directories the FSEvents watcher should follow for live add/remove/enable changes.
+    static func watchPaths() -> [String] {
+        discoverRoots().flatMap { [$0.installed.path] + ($0.enabled.map { [$0.path] } ?? []) }
+    }
 
     func reload() {
-        let lock = Self.parseLock(base.appendingPathComponent("skills-lock.json"))
         let fm = FileManager.default
         let dateFmt = DateFormatter(); dateFmt.dateFormat = "yyyy-MM-dd"
-        var result: [Skill] = []
-        let dirs = (try? fm.contentsOfDirectory(at: agentsDir,
-                        includingPropertiesForKeys: [.isDirectoryKey],
-                        options: [.skipsHiddenFiles])) ?? []
-        for dir in dirs {
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
-            let id = dir.lastPathComponent
-            let frontmatter = Self.parseFrontmatter(dir.appendingPathComponent("SKILL.md"))
-            let meta = lock[id]
-            let enabled = fm.fileExists(atPath: claudeDir.appendingPathComponent(id).path)
-            let files = (try? fm.contentsOfDirectory(atPath: dir.path))?.count ?? 1
-            var installed = "—"
-            if let attrs = try? fm.attributesOfItem(atPath: dir.path), let d = attrs[.modificationDate] as? Date {
-                installed = dateFmt.string(from: d)
+        var byId: [String: Skill] = [:]
+        for root in Self.discoverRoots() {
+            let lock = root.lock.map { Self.parseLock($0) } ?? [:]
+            let dirs = (try? fm.contentsOfDirectory(at: root.installed,
+                            includingPropertiesForKeys: [.isDirectoryKey],
+                            options: [.skipsHiddenFiles])) ?? []
+            for dir in dirs {
+                let id = dir.lastPathComponent
+                if byId[id] != nil { continue }   // the first root that has this skill wins
+                let md = dir.appendingPathComponent("SKILL.md")
+                guard fm.fileExists(atPath: md.path) else { continue }
+                let frontmatter = Self.parseFrontmatter(md)
+                let meta = lock[id]
+                let enabled = root.enabled == nil ? true
+                            : fm.fileExists(atPath: root.enabled!.appendingPathComponent(id).path)
+                let files = (try? fm.contentsOfDirectory(atPath: dir.path))?.count ?? 1
+                var installed = "—"
+                if let attrs = try? fm.attributesOfItem(atPath: dir.path), let d = attrs[.modificationDate] as? Date {
+                    installed = dateFmt.string(from: d)
+                }
+                byId[id] = Skill(
+                    id: id,
+                    name: frontmatter.name ?? id,
+                    description: frontmatter.description ?? "",
+                    version: frontmatter.version,
+                    source: meta?.source ?? "local",
+                    category: Self.category(fromPath: meta?.skillPath ?? id),
+                    skillPath: meta?.skillPath ?? "\(id)/SKILL.md",
+                    enabled: enabled,
+                    fileCount: files,
+                    installedAt: installed,
+                    dirPath: dir.path
+                )
             }
-            result.append(Skill(
-                id: id,
-                name: frontmatter.name ?? id,
-                description: frontmatter.description ?? "",
-                version: frontmatter.version,
-                source: meta?.source ?? "local",
-                category: Self.category(fromPath: meta?.skillPath ?? id),
-                skillPath: meta?.skillPath ?? "\(id)/SKILL.md",
-                enabled: enabled,
-                fileCount: files,
-                installedAt: installed,
-                dirPath: dir.path
-            ))
         }
-        result.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        skills = result
+        skills = byId.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     static func parseFrontmatter(_ url: URL) -> (name: String?, description: String?, version: String?) {
@@ -735,6 +764,8 @@ final class ArtStore {
     private var failed: Set<String> = []
     private var inflight: Set<String> = []
     private var waiters: [String: [(NSImage) -> Void]] = [:]   // cards awaiting an in-flight download
+    private var usedImages: Set<String> = []                   // AIC image ids already taken (dedup)
+    private var runtimeAttribution: [String: String] = [:]     // skill id → "Title — Artist" for runtime picks
     private let dir: URL
 
     init() {
@@ -747,6 +778,15 @@ final class ArtStore {
            let m = try? JSONDecoder().decode([String: Entry].self, from: d) {
             map = m
         }
+        // Seed the dedup set with every image already claimed by the curated map, so a
+        // runtime-resolved skill never reuses a curated painting.
+        for e in map.values { if let iid = Self.aicImageId(e.url) { usedImages.insert(iid) } }
+    }
+
+    private static func aicImageId(_ url: String) -> String? {
+        // …/iiif/2/<image_id>/full/…
+        guard let r = url.range(of: "/iiif/2/") else { return nil }
+        return url[r.upperBound...].split(separator: "/").first.map(String.init)
     }
 
     private func diskURL(_ id: String) -> URL {
@@ -762,39 +802,91 @@ final class ArtStore {
 
     func hasArt(_ id: String) -> Bool { map[id] != nil }
     func attribution(_ id: String) -> String? {
-        guard let e = map[id] else { return nil }
-        let parts = [e.by, e.license].compactMap { $0 }.filter { !$0.isEmpty }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        if let e = map[id] {
+            let parts = [e.by, e.license].compactMap { $0 }.filter { !$0.isEmpty }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }
+        if let by = runtimeAttribution[id] { return by + " · Public domain · Art Institute of Chicago" }
+        return nil
     }
 
-    /// Download the mapped CC art if needed; calls back on main with the image, or nil if
-    /// there's no mapping / it fails (caller keeps the themed fallback). Call on main.
-    func fetch(_ id: String, completion: @escaping (NSImage?) -> Void) {
+    /// Resolve and download a painting for `skill`; calls back on main with the image (or nil
+    /// if it can't find one / fails — the caller keeps the themed fallback). For a skill in the
+    /// bundled curated map it uses that painting; otherwise it searches the Art Institute live
+    /// so ANY user's skills get a relevant painting with no setup. Call on main.
+    func fetch(_ skill: Skill, completion: @escaping (NSImage?) -> Void) {
+        let id = skill.id
         if let i = cached(id) { completion(i); return }
-        guard let entry = map[id], let url = URL(string: entry.url) else { completion(nil); return }
         if failed.contains(id) { completion(nil); return }
         // Queue this card's callback — every card awaiting the same in-flight image is
-        // notified when it lands (NSCollectionView recycles cells, so the card that
-        // started the download is often gone by the time it finishes).
+        // notified when it lands (NSCollectionView recycles cells, so the card that started
+        // the download is often gone by the time it finishes).
         waiters[id, default: []].append { completion($0) }
         if inflight.contains(id) { return }
         inflight.insert(id)
+        resolveURL(skill) { [weak self] url in
+            guard let self = self else { return }
+            guard let url = url else { self.deliver(id, nil); return }
+            var req = URLRequest(url: url)
+            req.setValue("Skelf/1.0 (skill art)", forHTTPHeaderField: "User-Agent")
+            // The Art Institute of Chicago's IIIF image server requires this header (else 403).
+            req.setValue("Skelf macOS (fulltimestudio29@gmail.com)", forHTTPHeaderField: "AIC-User-Agent")
+            URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    if let data = data, let img = NSImage(data: data) {
+                        try? data.write(to: self.diskURL(id)); self.mem[id] = img; self.deliver(id, img)
+                    } else { self.deliver(id, nil) }
+                }
+            }.resume()
+        }
+    }
+
+    private func deliver(_ id: String, _ img: NSImage?) {
+        inflight.remove(id)
+        let cbs = waiters.removeValue(forKey: id) ?? []
+        if let img = img { cbs.forEach { $0(img) } } else { failed.insert(id) }
+    }
+
+    // Curated map for known skills, else a live Art Institute search for this skill's theme.
+    private func resolveURL(_ skill: Skill, _ done: @escaping (URL?) -> Void) {
+        if let entry = map[skill.id], let url = URL(string: entry.url) { done(url); return }
+        runtimeSearch(skill, done)
+    }
+
+    private func runtimeSearch(_ skill: Skill, _ done: @escaping (URL?) -> Void) {
+        var comp = URLComponents(string: "https://api.artic.edu/api/v1/artworks/search")!
+        comp.queryItems = [
+            .init(name: "q", value: artKeyword(for: skill)),
+            .init(name: "query[term][is_public_domain]", value: "true"),
+            .init(name: "fields", value: "image_id,title,artist_title,classification_titles"),
+            .init(name: "limit", value: "40")]
+        guard let url = comp.url else { done(nil); return }
         var req = URLRequest(url: url)
-        req.setValue("Skelf/1.0 (skill art)", forHTTPHeaderField: "User-Agent")
-        // The Art Institute of Chicago's IIIF image server requires this header (else 403).
         req.setValue("Skelf macOS (fulltimestudio29@gmail.com)", forHTTPHeaderField: "AIC-User-Agent")
         URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.inflight.remove(id)
-                let cbs = self.waiters.removeValue(forKey: id) ?? []
-                if let data = data, let img = NSImage(data: data) {
-                    try? data.write(to: self.diskURL(id))
-                    self.mem[id] = img
-                    cbs.forEach { $0(img) }
-                } else {
-                    self.failed.insert(id)
+            guard let self = self else { return }
+            var pick: (id: String, title: String, artist: String)?
+            if let data = data,
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let results = obj["data"] as? [[String: Any]] {
+                func scan(paintingsOnly: Bool) {
+                    for r in results where pick == nil {
+                        guard let iid = r["image_id"] as? String, !iid.isEmpty,
+                              !self.usedImages.contains(iid) else { continue }
+                        let cls = (r["classification_titles"] as? [String])?.map { $0.lowercased() } ?? []
+                        if paintingsOnly && !cls.contains(where: { $0.contains("painting") }) { continue }
+                        pick = (iid, r["title"] as? String ?? "Untitled", r["artist_title"] as? String ?? "Unknown")
+                    }
                 }
+                scan(paintingsOnly: true)
+                if pick == nil { scan(paintingsOnly: false) }   // accept any artwork if no painting
+            }
+            DispatchQueue.main.async {
+                guard let p = pick else { done(nil); return }
+                self.usedImages.insert(p.id)
+                self.runtimeAttribution[skill.id] = "\(p.title) — \(p.artist)"
+                done(URL(string: "https://www.artic.edu/iiif/2/\(p.id)/full/843,/0/default.jpg"))
             }
         }.resume()
     }
@@ -836,6 +928,39 @@ func artSymbol(for skill: Skill) -> String {
     case "deprecated": return "archivebox"
     default: return "sparkles"
     }
+}
+
+// A paintable MUSEUM-SEARCH subject for a skill — used at runtime to find a relevant
+// public-domain painting for skills NOT in the curated map (so any user's skills get art).
+// Maps the skill's purpose to a concrete painting subject the Art Institute search will hit.
+func artKeyword(for skill: Skill) -> String {
+    let hay = (skill.name + " " + skill.category + " " + skill.description).lowercased()
+    let table: [(String, String)] = [
+        ("animation", "dancers"), ("animate", "dancers"), ("motion", "horses"), ("spring", "fountain"),
+        ("sound", "musicians"), ("audio", "musicians"), ("music", "musicians"),
+        ("icon", "still life"), ("morph", "metamorphosis"),
+        ("test", "still life"), ("tdd", "still life"), ("qa", "inspection"),
+        ("bug", "anatomy"), ("diagnos", "physician"), ("debug", "anatomy"),
+        ("refactor", "scaffold"), ("architect", "architecture"), ("scaffold", "construction"),
+        ("design", "sketch"), ("interface", "facade"), ("prototype", "study"), ("sketch", "drawing"),
+        ("domain", "map"), ("model", "map"), ("language", "manuscript"), ("ubiquitous", "atlas"),
+        ("prd", "manuscript"), ("article", "manuscript"), ("writ", "manuscript"), ("edit", "scribe"),
+        ("issue", "harvest"), ("triage", "physician"), ("handoff", "relay"), ("merge", "bridge"),
+        ("git", "fortress"), ("commit", "fortress"), ("guardrail", "fortress"), ("pre-commit", "gate"),
+        ("review", "scholar"), ("decision", "crossroads"), ("map", "map"), ("plan", "map"),
+        ("teach", "classroom"), ("grill", "interrogation"), ("ask", "conversation"),
+        ("interview", "tribunal"), ("docs", "library"), ("doc", "library"),
+        ("obsidian", "library"), ("vault", "library"), ("market", "market"),
+        ("human", "portrait"), ("caveman", "cave"), ("zoom", "panorama"),
+        ("migrate", "caravan"), ("shoehorn", "harbor"),
+        ("principle", "geometry"), ("fragment", "mosaic"), ("shape", "sculptor"),
+        ("beat", "orchestra"), ("exercise", "gymnasium"), ("implement", "blacksmith"),
+        ("setup", "workshop"), ("config", "workshop"), ("scan", "panorama"),
+    ]
+    for (kw, subj) in table where hay.contains(kw) { return subj }
+    // Fall back to the skill's own first name word, else a safe broad subject.
+    let word = skill.name.lowercased().split(whereSeparator: { "-_ ".contains($0) }).first.map(String.init) ?? ""
+    return word.count >= 4 ? word : "landscape"
 }
 
 // A skill/folder "image": a single cached bitmap layer (creator avatar, or a
@@ -1145,7 +1270,7 @@ final class SkillGridItem: NSCollectionViewItem {
         } else {
             art.setThemedFallback(skill)
             let key = skill.id
-            ArtStore.shared.fetch(skill.id) { [weak self] img in
+            ArtStore.shared.fetch(skill) { [weak self] img in
                 guard let self = self, self.artKey == key, let img = img else { return }
                 self.art.setAvatar(img)   // upgrade the fallback to the real CC art
             }
@@ -1836,7 +1961,7 @@ final class SkillDetailView: NSView {
         if let img = ArtStore.shared.cached(skill.id) { banner.setAvatar(img) }
         else {
             banner.setThemedFallback(skill)
-            ArtStore.shared.fetch(skill.id) { [weak self] img in
+            ArtStore.shared.fetch(skill) { [weak self] img in
                 guard let self = self, self.artToken == token, let img = img else { return }
                 self.banner.setAvatar(img)
             }
@@ -1846,15 +1971,27 @@ final class SkillDetailView: NSView {
         bannerStatus.stringValue = skill.enabled ? "● Enabled" : "○ Installed · off"
         bannerStatus.textColor = skill.enabled ? NSColor.systemGreen : NSColor.white.withAlphaComponent(0.8)
 
-        // left column: Summary + the GitHub-style SKILL.md card
-        let raw = (try? String(contentsOfFile: skill.skillMDPath, encoding: .utf8)) ?? ""
-        let (_, body) = splitFrontmatter(raw)
+        // left column: Summary + the GitHub-style SKILL.md card. Reading the file and
+        // rendering the markdown are the expensive bits — do them OFF the main thread so the
+        // navigation push animates smoothly, then swap the body in (this was the click lag).
         summaryLabel.stringValue = skill.description.isEmpty ? "No description in SKILL.md." : skill.description
-        let bodyTrim = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        bodyLabel.attributedStringValue = bodyTrim.isEmpty
-            ? NSAttributedString(string: "This skill's SKILL.md has no content beyond its frontmatter.",
-                                 attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor])
-            : renderGitHubMarkdown(bodyTrim)
+        bodyLabel.attributedStringValue = NSAttributedString(string: "Loading…",
+            attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.tertiaryLabelColor])
+        let mdPath = skill.skillMDPath
+        let sid = skill.id
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let raw = (try? String(contentsOfFile: mdPath, encoding: .utf8)) ?? ""
+            let (_, body) = splitFrontmatter(raw)
+            let bodyTrim = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            let attr = bodyTrim.isEmpty
+                ? NSAttributedString(string: "This skill's SKILL.md has no content beyond its frontmatter.",
+                                     attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor])
+                : renderGitHubMarkdown(bodyTrim)
+            DispatchQueue.main.async {
+                guard let self = self, self.skill?.id == sid else { return }   // still this skill
+                self.bodyLabel.attributedStringValue = attr
+            }
+        }
 
         rebuildSidebar(skill, isFavorite: isFavorite, creator: creator, token: token)
     }
@@ -3159,7 +3296,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         if let img = ArtStore.shared.cached(skill.id) { t.setImage(img) }
         else {
             t.setCG(SkillArtView.themedImage(skill))
-            ArtStore.shared.fetch(skill.id) { [weak t] img in
+            ArtStore.shared.fetch(skill) { [weak t] img in
                 guard let t = t, let img = img else { return }; t.setImage(img)
             }
         }
@@ -3375,7 +3512,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     }
 
     private func startWatching() {
-        watcher = SkillWatcher(paths: [store.agentsDir.path, store.claudeDir.path]) { [weak self] in
+        watcher = SkillWatcher(paths: SkillStore.watchPaths()) { [weak self] in
             self?.reloadFromDisk(auto: true)
         }
         watcher?.start()
