@@ -1871,26 +1871,29 @@ final class GridCollectionView: NSCollectionView {
     }
 }
 
-// A flow layout that sizes cards to FILL each row evenly (justified) for a target
-// column width, recomputed live as the window resizes (shouldInvalidateLayout) so the
-// cards stretch instantly — no ragged right-hand gap, no fixed size.
+// Sizes cards so a fixed grid (4 columns × ~3 visible rows) fills the viewport at any
+// window size — recomputed live as the window resizes (width via shouldInvalidateLayout,
+// height via the controller's viewDidLayout) so the cards adapt instantly.
 final class CardFlowLayout: NSCollectionViewFlowLayout {
-    var targetWidth: CGFloat = 232
+    var columns: CGFloat = 4
+    var visibleRows: CGFloat = 3
     override init() {
         super.init()
-        itemSize = NSSize(width: 224, height: 300)
-        minimumInteritemSpacing = 18
-        minimumLineSpacing = 20
-        sectionInset = NSEdgeInsets(top: 6, left: 22, bottom: 18, right: 22)
-        headerReferenceSize = NSSize(width: 0, height: 30)
+        itemSize = NSSize(width: 200, height: 168)
+        minimumInteritemSpacing = 14
+        minimumLineSpacing = 14
+        sectionInset = NSEdgeInsets(top: 4, left: 18, bottom: 16, right: 18)
+        headerReferenceSize = NSSize(width: 0, height: 28)
     }
     required init?(coder: NSCoder) { super.init(coder: coder) }
     override func prepare() {
         if let cv = collectionView, cv.bounds.width > 1 {
-            let avail = cv.bounds.width - sectionInset.left - sectionInset.right
-            let cols = max(1, floor((avail + minimumInteritemSpacing) / (targetWidth + minimumInteritemSpacing)))
-            let w = floor((avail - (cols - 1) * minimumInteritemSpacing) / cols)
-            itemSize = NSSize(width: max(150, w), height: floor(max(150, w) * 300.0 / 224.0))
+            let vpW = cv.bounds.width                                   // = scroll content (clip) width
+            let vpH = cv.enclosingScrollView?.contentView.bounds.height ?? (vpW * 0.6)
+            let w = floor((vpW - sectionInset.left - sectionInset.right - (columns - 1) * minimumInteritemSpacing) / columns)
+            let usableH = vpH - headerReferenceSize.height - sectionInset.top - sectionInset.bottom - (visibleRows - 1) * minimumLineSpacing
+            let h = floor(usableH / visibleRows)
+            itemSize = NSSize(width: max(120, w), height: max(118, min(h, w * 1.3)))
         }
         super.prepare()
     }
@@ -1978,6 +1981,15 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
     }
 
     override func viewDidLoad() { super.viewDidLoad(); reload() }
+
+    // Card width adapts via the layout's shouldInvalidateLayout (width change); card
+    // HEIGHT depends on the viewport height, so re-invalidate when the view resizes.
+    private var lastViewportH: CGFloat = 0
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        let h = gridScroll.contentView.bounds.height
+        if abs(h - lastViewportH) > 0.5 { lastViewportH = h; collectionView.collectionViewLayout?.invalidateLayout() }
+    }
 
     /// Called by the SwiftUI host whenever search / data changes. (CardFlowLayout
     /// handles responsive resizing itself, live, via shouldInvalidateLayout.)
