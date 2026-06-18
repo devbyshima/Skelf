@@ -61,7 +61,11 @@ open Skelf.app        # launch (dock icon + window + menu-bar icon)
   **Favorites** (copy icon → copies `/name`) and **Folders** (`>` chevron → navigates
   **into** the folder, with a back button and a **springy slide** between views).
   **Search** reaches every skill. Top-right has a **window icon** (opens the app) and a
-  **⋯ options menu** (Open Window / Refresh / About / Quit).
+  **⋯ options menu** (Open Window / Refresh / **Play Sounds** / About / Quit).
+- **UI sounds** (off by default) — a tasteful system sound on copy (`Tink`) and on a
+  move/drop (`Pop`). Toggle them from the popover's **⋯ → Play Sounds** menu (checkmark
+  shows the state; flipping it on plays a quick preview). Persisted in `UserDefaults`
+  (`soundEnabled`).
 - **Auto-detect** — an FSEvents watcher on the skill directories means adding,
   removing, enabling, disabling, or editing a skill updates the app **live**, no manual
   refresh.
