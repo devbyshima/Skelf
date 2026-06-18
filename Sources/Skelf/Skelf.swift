@@ -434,14 +434,31 @@ final class FolderStore {
         if changed { persist(notify: false) }
     }
 
-    /// Group each creator's skills into an auto-folder. Root is "unfiled": any skill
-    /// sitting at root is moved into its creator's auto-folder (created on demand);
-    /// skills the user has filed into their own folders are left untouched. Runs on
-    /// every reload, so newly-installed skills self-file under their creator.
+    /// Group skills under their creator — but only when the grouping is meaningful:
+    /// the skill must have a real `owner/repo` source AND that owner must have ≥2
+    /// installed skills. Singletons, `local`, and sourceless skills stay loose at
+    /// root (a lone skill doesn't earn a folder). Only skills at root are touched —
+    /// anything the user filed themselves is left alone. Auto-folders that stop being
+    /// valid are dissolved (their skills returned to root). Runs on every reload.
     func autoCategorize(_ installed: [Skill]) {
         var changed = false
-        let creatorOf = Dictionary(installed.map { ($0.id, Self.creatorName($0.source)) },
-                                   uniquingKeysWith: { a, _ in a })
+        func creator(of s: Skill) -> String? {
+            guard s.source.contains("/") else { return nil }
+            return s.source.split(separator: "/").first.map(String.init)
+        }
+        let creatorOf = Dictionary(uniqueKeysWithValues: installed.compactMap { s in creator(of: s).map { (s.id, $0) } })
+        var counts: [String: Int] = [:]
+        for c in creatorOf.values { counts[c, default: 0] += 1 }
+        let valid = Set(counts.filter { $0.value >= 2 }.keys)
+
+        // dissolve auto-folders whose creator is no longer valid → skills back to root
+        for (id, n) in nodes where n.autoCreator != nil && !valid.contains(n.autoCreator ?? "") {
+            for sid in n.skills where !(nodes[rootId]?.skills.contains(sid) ?? true) { nodes[rootId]?.skills.append(sid) }
+            for cf in n.folders { nodes[cf]?.parent = rootId; nodes[rootId]?.folders.append(cf) }
+            nodes[rootId]?.folders.removeAll { $0 == id }
+            nodes[id] = nil
+            changed = true
+        }
 
         func autoFolderId(for creator: String) -> String {
             if let existing = nodes.values.first(where: { $0.autoCreator == creator }) { return existing.id }
@@ -453,14 +470,14 @@ final class FolderStore {
         }
 
         for sid in (nodes[rootId]?.skills ?? []) {
-            guard let creator = creatorOf[sid] else { continue }
-            let fid = autoFolderId(for: creator)
+            guard let c = creatorOf[sid], valid.contains(c) else { continue }   // singletons/local stay at root
+            let fid = autoFolderId(for: c)
             nodes[rootId]?.skills.removeAll { $0 == sid }
             if !(nodes[fid]?.skills.contains(sid) ?? true) { nodes[fid]?.skills.append(sid) }
             changed = true
         }
 
-        // drop auto-folders that ended up empty (e.g. their creator's skills were uninstalled)
+        // drop auto-folders that ended up empty
         for (id, n) in nodes where n.autoCreator != nil && n.skills.isEmpty && n.folders.isEmpty {
             if let p = n.parent { nodes[p]?.folders.removeAll { $0 == id } }
             nodes[id] = nil
@@ -587,99 +604,202 @@ final class GlassCardView: NSGlassEffectView {
 
 // MARK: - Grid tile
 
-// A per-skill "image": a rich diagonal gradient + soft radial light + a large faint
-// monogram subject + a bottom scrim for legible text. Reused by the grid card and the
-// detail header so a skill looks the same wherever it appears.
+// Fetches + disk-caches a creator's public GitHub avatar (no token needed:
+// https://github.com/<user>.png). Memory + on-disk cache keep scrolling cheap.
+final class AvatarStore {
+    static let shared = AvatarStore()
+    private var mem: [String: NSImage] = [:]
+    private var failed: Set<String> = []
+    private var inflight: Set<String> = []
+    private let dir: URL
+
+    init() {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        dir = base.appendingPathComponent("dev.fulltime.skelf/avatars", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    private func diskURL(_ creator: String) -> URL {
+        dir.appendingPathComponent(creator.replacingOccurrences(of: "/", with: "_") + ".png")
+    }
+
+    /// Synchronous cache hit (memory, then disk); nil if not fetched yet.
+    func cached(_ creator: String) -> NSImage? {
+        if let i = mem[creator] { return i }
+        if let i = NSImage(contentsOf: diskURL(creator)) { mem[creator] = i; return i }
+        return nil
+    }
+
+    /// Fetch if needed; calls back on the main queue with the avatar (or nil). Must be called on main.
+    func fetch(_ creator: String, completion: @escaping (NSImage?) -> Void) {
+        if let i = cached(creator) { completion(i); return }
+        if failed.contains(creator) { completion(nil); return }
+        if inflight.contains(creator) { return }   // a fetch is already running
+        guard let url = URL(string: "https://github.com/\(creator).png?size=400") else { completion(nil); return }
+        inflight.insert(creator)
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.inflight.remove(creator)
+                if let data = data, let img = NSImage(data: data) {
+                    try? data.write(to: self.diskURL(creator))
+                    self.mem[creator] = img
+                    completion(img)
+                } else {
+                    self.failed.insert(creator)
+                    completion(nil)
+                }
+            }
+        }.resume()
+    }
+}
+
+// A skill/folder "image": a single cached bitmap layer (creator avatar, or a
+// pre-rendered gradient fallback) + a bottom scrim. No live gradients/text layers,
+// so scrolling stays smooth.
 final class SkillArtView: NSView {
-    private let base = CAGradientLayer()
-    private let glow = CAGradientLayer()
-    private let mono = CATextLayer()
+    private let imageLayer = CALayer()
     private let scrim = CAGradientLayer()
-    var showSubject = true { didSet { mono.isHidden = !showSubject } }
     var showScrim = true { didSet { scrim.isHidden = !showScrim } }
-    var subjectFraction: CGFloat = 0.62   // monogram size relative to the smaller edge
+    private static var gradientCache: [String: CGImage] = [:]
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.masksToBounds = true
-        base.startPoint = CGPoint(x: 0.0, y: 1.0); base.endPoint = CGPoint(x: 1.0, y: 0.0)
-        glow.type = .radial
-        glow.colors = [NSColor.white.withAlphaComponent(0.42).cgColor, NSColor.white.withAlphaComponent(0).cgColor]
-        glow.startPoint = CGPoint(x: 0.7, y: 0.8); glow.endPoint = CGPoint(x: 1.35, y: 1.45)
-        mono.alignmentMode = .center
-        mono.foregroundColor = NSColor.white.withAlphaComponent(0.18).cgColor
-        mono.font = NSFont.systemFont(ofSize: 10, weight: .heavy)
-        mono.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        imageLayer.contentsGravity = .resizeAspectFill
+        imageLayer.masksToBounds = true
+        imageLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
         scrim.startPoint = CGPoint(x: 0.5, y: 0.0); scrim.endPoint = CGPoint(x: 0.5, y: 1.0)
-        scrim.colors = [NSColor.black.withAlphaComponent(0.74).cgColor,
-                        NSColor.black.withAlphaComponent(0.10).cgColor,
+        scrim.colors = [NSColor.black.withAlphaComponent(0.80).cgColor,
+                        NSColor.black.withAlphaComponent(0.14).cgColor,
                         NSColor.clear.cgColor]
-        scrim.locations = [0.0, 0.46, 1.0]
-        layer?.addSublayer(base)
-        layer?.addSublayer(glow)
-        layer?.addSublayer(mono)
+        scrim.locations = [0.0, 0.5, 1.0]
+        layer?.addSublayer(imageLayer)
         layer?.addSublayer(scrim)
     }
     required init?(coder: NSCoder) { fatalError() }
+    override func layout() { super.layout(); imageLayer.frame = bounds; scrim.frame = bounds }
 
-    override func layout() {
-        super.layout()
-        for l in [base, glow, scrim] { l.frame = bounds }
-        let fs = max(40, min(bounds.width, bounds.height) * subjectFraction)
-        mono.fontSize = fs
-        mono.frame = CGRect(x: 0, y: bounds.height * 0.40, width: bounds.width, height: fs * 1.25)
+    func setGradient(_ name: String, monogram: Bool = true) {
+        imageLayer.contents = Self.gradientImage(name, monogram: monogram)
+    }
+    func setAvatar(_ image: NSImage) {
+        var r = CGRect(origin: .zero, size: image.size)
+        imageLayer.contents = image.cgImage(forProposedRect: &r, context: nil, hints: nil)
     }
 
-    func configure(_ name: String, enabled: Bool = true) {
-        base.colors = Palette.gradientColors(name)
-        mono.string = Palette.initials(name)
-        layer?.opacity = enabled ? 1.0 : 0.9
+    static func gradientImage(_ name: String, monogram: Bool) -> CGImage {
+        let key = name + (monogram ? "#m" : "")
+        if let c = gradientCache[key] { return c }
+        let size = CGSize(width: 320, height: 420)
+        let img = NSImage(size: size)
+        img.lockFocus()
+        let cols = Palette.gradientColors(name).compactMap { NSColor(cgColor: $0) }
+        if cols.count >= 2, let g = NSGradient(starting: cols[0], ending: cols[1]) {
+            g.draw(in: NSRect(origin: .zero, size: size), angle: 55)
+        }
+        if monogram {
+            let initials = Palette.initials(name) as NSString
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: size.width * 0.46, weight: .heavy),
+                .foregroundColor: NSColor.white.withAlphaComponent(0.17)]
+            let ss = initials.size(withAttributes: attrs)
+            initials.draw(at: NSPoint(x: (size.width - ss.width) / 2, y: size.height * 0.46), withAttributes: attrs)
+        }
+        img.unlockFocus()
+        var r = CGRect(origin: .zero, size: size)
+        return img.cgImage(forProposedRect: &r, context: nil, hints: nil) ?? CGImage.empty
     }
 }
 
-// MARK: - Grid tile (skill card — image background, à la the product-card reference)
+private extension CGImage {
+    static var empty: CGImage {
+        let ctx = CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        return ctx.makeImage()!
+    }
+}
+
+// The card's root view: rounded, with a soft drop shadow that fades in on hover.
+final class CardRootView: NSView {
+    var corner: CGFloat = 22
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOffset = CGSize(width: 0, height: -6)
+        layer?.shadowRadius = 16
+        layer?.shadowOpacity = 0
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func layout() {
+        super.layout()
+        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: corner, cornerHeight: corner, transform: nil)
+    }
+}
+
+// A Liquid-Glass circular control overlaid on a card (favorite / ⋯).
+final class GlassCircleButton: NSView {
+    let button = NSButton()
+    private let glass = NSGlassEffectView()
+    init(symbol: String, target: AnyObject, action: Selector) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        button.isBordered = false
+        button.bezelStyle = .regularSquare
+        button.imageScaling = .scaleProportionallyDown
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        button.contentTintColor = .white
+        button.imagePosition = .imageOnly
+        button.focusRingType = .none
+        button.target = target
+        button.action = action
+        button.translatesAutoresizingMaskIntoConstraints = false
+        glass.cornerRadius = 15
+        if #available(macOS 27.0, *) { glass.effectIsInteractive = true }
+        glass.contentView = button
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(glass)
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: 30),
+            heightAnchor.constraint(equalToConstant: 30),
+            glass.topAnchor.constraint(equalTo: topAnchor),
+            glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+            glass.leadingAnchor.constraint(equalTo: leadingAnchor),
+            glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+// MARK: - Grid tile (skill card — creator avatar background, product-card style)
 
 final class SkillGridItem: NSCollectionViewItem {
     private let art = SkillArtView()
-    private let favButton = NSButton()
-    private let menuButton = NSButton()
+    private var favCircle: GlassCircleButton!
+    private var menuCircle: GlassCircleButton!
     private let nameLabel = NSTextField(labelWithString: "")
     private let initiatorBox = NSView()
     private let initiatorLabel = NSTextField(labelWithString: "")
     private let descLabel = NSTextField(wrappingLabelWithString: "")
     private let copyButton = NSButton()
     private var hovering = false
+    private var artKey = ""
     var onMenu: ((NSView) -> Void)?
     var onToggleFavorite: (() -> Void)?
     var onCopy: (() -> Void)?
 
-    private func styleCircle(_ b: NSButton, _ symbol: String, _ action: Selector) {
-        b.isBordered = false
-        b.wantsLayer = true
-        b.layer?.cornerRadius = 14
-        b.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.34).cgColor
-        b.bezelStyle = .regularSquare
-        b.imageScaling = .scaleProportionallyDown
-        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        b.contentTintColor = .white
-        b.imagePosition = .imageOnly
-        b.focusRingType = .none
-        b.target = self
-        b.action = action
-        b.translatesAutoresizingMaskIntoConstraints = false
-    }
-
     override func loadView() {
-        let root = NSView()
+        let root = CardRootView()
         art.translatesAutoresizingMaskIntoConstraints = false
         art.layer?.cornerRadius = 22
-        art.subjectFraction = 0.5
         root.addSubview(art)
 
-        styleCircle(favButton, "star", #selector(favClicked))
-        styleCircle(menuButton, "ellipsis", #selector(menuClicked))
-        let controls = NSStackView(views: [favButton, menuButton])
+        favCircle = GlassCircleButton(symbol: "star", target: self, action: #selector(favClicked))
+        menuCircle = GlassCircleButton(symbol: "ellipsis", target: self, action: #selector(menuClicked))
+        let controls = NSStackView(views: [favCircle, menuCircle])
         controls.orientation = .horizontal
         controls.spacing = 6
         controls.translatesAutoresizingMaskIntoConstraints = false
@@ -728,10 +848,6 @@ final class SkillGridItem: NSCollectionViewItem {
 
             controls.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
             controls.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
-            favButton.widthAnchor.constraint(equalToConstant: 28),
-            favButton.heightAnchor.constraint(equalToConstant: 28),
-            menuButton.widthAnchor.constraint(equalToConstant: 28),
-            menuButton.heightAnchor.constraint(equalToConstant: 28),
 
             copyButton.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             copyButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
@@ -768,22 +884,36 @@ final class SkillGridItem: NSCollectionViewItem {
     }
 
     func configure(_ skill: Skill, isFavorite: Bool) {
-        art.configure(skill.name, enabled: skill.enabled)
+        let creator = skill.source.contains("/") ? skill.source.split(separator: "/").first.map(String.init) : nil
+        artKey = creator ?? ("grad:" + skill.name)
+        if let creator = creator, let img = AvatarStore.shared.cached(creator) {
+            art.setAvatar(img)
+        } else {
+            art.setGradient(skill.name)
+            if let creator = creator {
+                let key = artKey
+                AvatarStore.shared.fetch(creator) { [weak self] img in
+                    guard let self = self, self.artKey == key, let img = img else { return }
+                    self.art.setAvatar(img)
+                }
+            }
+        }
         nameLabel.stringValue = skill.name
         initiatorLabel.stringValue = skill.enabled ? skill.category : "off"
         initiatorBox.layer?.backgroundColor = (skill.enabled ? NSColor.black.withAlphaComponent(0.44)
                                                              : NSColor.systemRed.withAlphaComponent(0.55)).cgColor
         descLabel.stringValue = skill.description.isEmpty ? "No description in SKILL.md." : skill.description
-        favButton.image = NSImage(systemSymbolName: isFavorite ? "star.fill" : "star",
-                                  accessibilityDescription: isFavorite ? "Favorited" : "Favorite")
-        favButton.contentTintColor = isFavorite ? .systemYellow : .white
+        favCircle.button.image = NSImage(systemSymbolName: isFavorite ? "star.fill" : "star",
+                                         accessibilityDescription: isFavorite ? "Favorited" : "Favorite")
+        favCircle.button.contentTintColor = isFavorite ? .systemYellow : .white
         setCopyTitle("Copy")
-        view.alphaValue = skill.enabled ? 1.0 : 0.6
+        view.alphaValue = skill.enabled ? 1.0 : 0.62
         view.toolTip = "\(skill.initiator)\n\n\(skill.description)"
+        resetHover()
     }
 
     @objc private func favClicked() { onToggleFavorite?() }
-    @objc private func menuClicked() { onMenu?(menuButton) }
+    @objc private func menuClicked() { onMenu?(menuCircle) }
     @objc private func copyClicked() {
         onCopy?()
         springPop(copyButton.layer, from: 0.9)
@@ -791,15 +921,25 @@ final class SkillGridItem: NSCollectionViewItem {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak self] in self?.setCopyTitle("Copy") }
     }
 
-    func pressPop() { springPop(art.layer, from: 0.96) }
+    func pressPop() { springPop(view.layer, from: 0.97) }
 
+    private func resetHover() {
+        hovering = false
+        view.layer?.transform = CATransform3DIdentity
+        view.layer?.shadowOpacity = 0
+        view.layer?.zPosition = 0
+    }
     override func mouseEntered(with event: NSEvent) { hovering = true; applyHover() }
     override func mouseExited(with event: NSEvent) { hovering = false; applyHover() }
     private func applyHover() {
+        guard let l = view.layer else { return }
+        l.zPosition = hovering ? 1 : 0
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.14; ctx.allowsImplicitAnimation = true
-            self.art.layer?.transform = self.hovering
-                ? CATransform3DScale(CATransform3DIdentity, 1.02, 1.02, 1) : CATransform3DIdentity
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(name: hovering ? .easeOut : .easeInEaseOut)
+            ctx.allowsImplicitAnimation = true
+            l.transform = hovering ? centerScale(l, 1.04) : CATransform3DIdentity
+            l.shadowOpacity = hovering ? 0.42 : 0.0
         }
     }
     override var isSelected: Bool {
@@ -810,45 +950,34 @@ final class SkillGridItem: NSCollectionViewItem {
     }
 }
 
-// MARK: - Folder tile (same card shape, folder treatment)
+// MARK: - Folder tile (same card shape, gradient + folder glyph)
 
 final class FolderGridItem: NSCollectionViewItem {
     private let art = SkillArtView()
     private let icon = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let countLabel = NSTextField(labelWithString: "")
-    private let menuButton = NSButton()
+    private var menuCircle: GlassCircleButton!
     private let barBadge = NSImageView()
     private var hovering = false
+    private var artKey = ""
     var onMenu: ((NSView) -> Void)?
 
     override func loadView() {
-        let root = NSView()
+        let root = CardRootView()
         art.translatesAutoresizingMaskIntoConstraints = false
         art.layer?.cornerRadius = 22
-        art.showSubject = false
         root.addSubview(art)
 
         icon.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: "Folder")
         icon.contentTintColor = NSColor.white.withAlphaComponent(0.92)
         icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 54, weight: .semibold)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 50, weight: .semibold)
         icon.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(icon)
 
-        menuButton.isBordered = false
-        menuButton.wantsLayer = true
-        menuButton.layer?.cornerRadius = 14
-        menuButton.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.34).cgColor
-        menuButton.bezelStyle = .regularSquare
-        menuButton.imageScaling = .scaleProportionallyDown
-        menuButton.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "More")
-        menuButton.contentTintColor = .white
-        menuButton.focusRingType = .none
-        menuButton.target = self
-        menuButton.action = #selector(menuClicked)
-        menuButton.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(menuButton)
+        menuCircle = GlassCircleButton(symbol: "ellipsis", target: self, action: #selector(menuClicked))
+        root.addSubview(menuCircle)
 
         barBadge.image = NSImage(systemSymbolName: "menubar.rectangle", accessibilityDescription: "In menu bar")
         barBadge.contentTintColor = .white
@@ -878,10 +1007,8 @@ final class FolderGridItem: NSCollectionViewItem {
             icon.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             icon.centerYAnchor.constraint(equalTo: root.centerYAnchor, constant: -18),
 
-            menuButton.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
-            menuButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
-            menuButton.widthAnchor.constraint(equalToConstant: 28),
-            menuButton.heightAnchor.constraint(equalToConstant: 28),
+            menuCircle.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
+            menuCircle.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
 
             barBadge.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
             barBadge.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
@@ -899,7 +1026,22 @@ final class FolderGridItem: NSCollectionViewItem {
     }
 
     func configure(_ node: FolderStore.Node, inMenuBar: Bool) {
-        art.configure(node.name, enabled: true)
+        // creator folders wear the creator's avatar; user folders get a gradient
+        if let creator = node.autoCreator {
+            artKey = creator
+            if let img = AvatarStore.shared.cached(creator) { art.setAvatar(img) }
+            else {
+                art.setGradient(node.name)
+                let key = creator
+                AvatarStore.shared.fetch(creator) { [weak self] img in
+                    guard let self = self, self.artKey == key, let img = img else { return }
+                    self.art.setAvatar(img)
+                }
+            }
+        } else {
+            artKey = "grad:" + node.name
+            art.setGradient(node.name)
+        }
         nameLabel.stringValue = node.name
         let s = node.skills.count, f = node.folders.count
         var parts: [String] = []
@@ -908,18 +1050,29 @@ final class FolderGridItem: NSCollectionViewItem {
         countLabel.stringValue = parts.joined(separator: " · ")
         barBadge.isHidden = !inMenuBar
         view.toolTip = node.name
+        resetHover()
     }
 
-    @objc private func menuClicked() { onMenu?(menuButton) }
-    func pressPop() { springPop(art.layer, from: 0.96) }
+    @objc private func menuClicked() { onMenu?(menuCircle) }
+    func pressPop() { springPop(view.layer, from: 0.97) }
 
+    private func resetHover() {
+        hovering = false
+        view.layer?.transform = CATransform3DIdentity
+        view.layer?.shadowOpacity = 0
+        view.layer?.zPosition = 0
+    }
     override func mouseEntered(with event: NSEvent) { hovering = true; applyHover() }
     override func mouseExited(with event: NSEvent) { hovering = false; applyHover() }
     private func applyHover() {
+        guard let l = view.layer else { return }
+        l.zPosition = hovering ? 1 : 0
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.14; ctx.allowsImplicitAnimation = true
-            self.art.layer?.transform = self.hovering
-                ? CATransform3DScale(CATransform3DIdentity, 1.02, 1.02, 1) : CATransform3DIdentity
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(name: hovering ? .easeOut : .easeInEaseOut)
+            ctx.allowsImplicitAnimation = true
+            l.transform = hovering ? centerScale(l, 1.04) : CATransform3DIdentity
+            l.shadowOpacity = hovering ? 0.42 : 0.0
         }
     }
     override var isSelected: Bool {
@@ -1016,40 +1169,122 @@ func splitFrontmatter(_ text: String) -> (rows: [(String, String)], body: String
     return (rows, body)
 }
 
-private func mdInlineClean(_ s: String) -> String {
-    s.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
-}
+// --- a small GitHub-flavoured markdown → NSAttributedString renderer (inline:
+// bold/italic/code/links; block: headings, lists, code fences, blockquotes) ---
 
-// A small, predictable markdown renderer for the read-only SKILL.md body: headings,
-// bullets and paragraphs (inline emphasis markers are stripped for a clean read).
-func renderSkillMarkdown(_ md: String) -> NSAttributedString {
+private func mdBold(_ f: NSFont) -> NSFont { NSFontManager.shared.convert(f, toHaveTrait: .boldFontMask) }
+private func mdItalic(_ f: NSFont) -> NSFont { NSFontManager.shared.convert(f, toHaveTrait: .italicFontMask) }
+
+private func mdInline(_ s: String, base: NSFont, color: NSColor) -> NSAttributedString {
     let out = NSMutableAttributedString()
-    func emit(_ s: String, _ font: NSFont, _ color: NSColor = .labelColor, before: CGFloat = 0, lead: CGFloat = 0) {
-        let p = NSMutableParagraphStyle()
-        p.lineSpacing = 3; p.paragraphSpacing = 5; p.paragraphSpacingBefore = before
-        p.firstLineHeadIndent = lead; p.headIndent = lead
-        out.append(NSAttributedString(string: s + "\n", attributes: [.font: font, .foregroundColor: color, .paragraphStyle: p]))
-    }
-    var inFence = false
-    for raw in md.components(separatedBy: "\n") {
-        let t = raw.trimmingCharacters(in: .whitespaces)
-        if t.hasPrefix("```") { inFence.toggle(); continue }
-        if inFence { emit(raw, .monospacedSystemFont(ofSize: 12, weight: .regular), .secondaryLabelColor, lead: 6); continue }
-        if t.isEmpty { out.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 5)])); continue }
-        if t.hasPrefix("### ") { emit(mdInlineClean(String(t.dropFirst(4))), .systemFont(ofSize: 14, weight: .semibold), before: 8) }
-        else if t.hasPrefix("## ") { emit(mdInlineClean(String(t.dropFirst(3))), .systemFont(ofSize: 16, weight: .bold), before: 12) }
-        else if t.hasPrefix("# ") { emit(mdInlineClean(String(t.dropFirst(2))), .systemFont(ofSize: 19, weight: .bold), before: 12) }
-        else if t.hasPrefix("- ") || t.hasPrefix("* ") { emit("•  " + mdInlineClean(String(t.dropFirst(2))), .systemFont(ofSize: 13), .labelColor, lead: 14) }
-        else if let r = t.range(of: #"^\d+\.\s"#, options: .regularExpression) {
-            emit(mdInlineClean(String(t)), .systemFont(ofSize: 13), .labelColor, lead: 14)
-            _ = r
+    let chars = Array(s)
+    var i = 0
+    func emit(_ str: String, _ font: NSFont, _ col: NSColor, link: String? = nil, code: Bool = false) {
+        var a: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: col]
+        if let link = link, let u = URL(string: link) {
+            a[.link] = u; a[.underlineStyle] = NSUnderlineStyle.single.rawValue
         }
-        else { emit(mdInlineClean(t), .systemFont(ofSize: 13)) }
+        if code { a[.backgroundColor] = NSColor.secondaryLabelColor.withAlphaComponent(0.16) }
+        out.append(NSAttributedString(string: str, attributes: a))
+    }
+    while i < chars.count {
+        let c = chars[i]
+        if c == "`" {
+            var j = i + 1, buf = ""
+            while j < chars.count, chars[j] != "`" { buf.append(chars[j]); j += 1 }
+            if j < chars.count {
+                emit(buf, .monospacedSystemFont(ofSize: base.pointSize - 0.5, weight: .regular), color, code: true)
+                i = j + 1; continue
+            }
+        }
+        if c == "*" || c == "_" {
+            let isDouble = (i + 1 < chars.count && chars[i + 1] == c)
+            let marker = isDouble ? String([c, c]) : String(c)
+            let rest = String(chars[(i + marker.count)...])
+            if let r = rest.range(of: marker) {
+                let inner = String(rest[..<r.lowerBound])
+                if !inner.isEmpty {
+                    emit(inner, isDouble ? mdBold(base) : mdItalic(base), color)
+                    i += marker.count + inner.count + marker.count; continue
+                }
+            }
+        }
+        if c == "[" {
+            let rest = String(chars[i...])
+            if let m = rest.range(of: #"^\[([^\]]+)\]\(([^)\s]+)[^)]*\)"#, options: .regularExpression) {
+                let matched = String(rest[m])
+                if let tr = matched.range(of: #"\[([^\]]+)\]"#, options: .regularExpression),
+                   let ur = matched.range(of: #"\(([^)\s]+)"#, options: .regularExpression) {
+                    let text = matched[tr].dropFirst().dropLast()
+                    let url = matched[ur].dropFirst()
+                    emit(String(text), base, .linkColor, link: String(url))
+                    i += matched.count; continue
+                }
+            }
+        }
+        emit(String(c), base, color)
+        i += 1
     }
     return out
 }
 
-// MARK: - Detail screen (two-column: scrollable SKILL.md + sticky sidebar, image header)
+func renderGitHubMarkdown(_ md: String) -> NSAttributedString {
+    let out = NSMutableAttributedString()
+    let body = NSColor.labelColor
+    let size: CGFloat = 13.5
+    func para(_ spacing: CGFloat, before: CGFloat = 0, lead: CGFloat = 0, ls: CGFloat = 4) -> NSMutableParagraphStyle {
+        let p = NSMutableParagraphStyle()
+        p.paragraphSpacing = spacing; p.paragraphSpacingBefore = before
+        p.firstLineHeadIndent = lead; p.headIndent = lead; p.lineSpacing = ls
+        return p
+    }
+    func line(_ attr: NSAttributedString, _ style: NSParagraphStyle) {
+        let m = NSMutableAttributedString(attributedString: attr)
+        m.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: m.length))
+        out.append(m); out.append(NSAttributedString(string: "\n"))
+    }
+    let lines = md.components(separatedBy: "\n")
+    var i = 0
+    while i < lines.count {
+        let t = lines[i].trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("```") {
+            var code = ""; i += 1
+            while i < lines.count, !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") { code += lines[i] + "\n"; i += 1 }
+            i += 1
+            let m = NSMutableAttributedString(string: code.hasSuffix("\n") ? String(code.dropLast()) : code,
+                attributes: [.font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+                             .foregroundColor: NSColor.labelColor,
+                             .backgroundColor: NSColor.secondaryLabelColor.withAlphaComponent(0.10),
+                             .paragraphStyle: para(10, before: 6, lead: 12)])
+            out.append(m); out.append(NSAttributedString(string: "\n")); continue
+        }
+        if t.isEmpty { out.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 5)])); i += 1; continue }
+        if t == "---" || t == "***" || t == "___" {
+            line(NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: 4)]), para(8, before: 6)); i += 1; continue
+        }
+        if t.hasPrefix("#### ") { line(mdInline(String(t.dropFirst(5)), base: .systemFont(ofSize: 13.5, weight: .semibold), color: body), para(6, before: 12)); i += 1; continue }
+        if t.hasPrefix("### ")  { line(mdInline(String(t.dropFirst(4)), base: .systemFont(ofSize: 15, weight: .semibold), color: body), para(6, before: 14)); i += 1; continue }
+        if t.hasPrefix("## ")   { line(mdInline(String(t.dropFirst(3)), base: .systemFont(ofSize: 18, weight: .bold), color: body), para(8, before: 18)); i += 1; continue }
+        if t.hasPrefix("# ")    { line(mdInline(String(t.dropFirst(2)), base: .systemFont(ofSize: 22, weight: .bold), color: body), para(8, before: 18)); i += 1; continue }
+        if t.hasPrefix("> ") || t == ">" {
+            line(mdInline(String(t.dropFirst(t.hasPrefix("> ") ? 2 : 1)), base: .systemFont(ofSize: size), color: .secondaryLabelColor), para(6, lead: 14)); i += 1; continue
+        }
+        if t.hasPrefix("- ") || t.hasPrefix("* ") || t.hasPrefix("+ ") {
+            let row = NSMutableAttributedString(string: "•  ", attributes: [.font: NSFont.systemFont(ofSize: size), .foregroundColor: NSColor.secondaryLabelColor])
+            row.append(mdInline(String(t.dropFirst(2)), base: .systemFont(ofSize: size), color: body))
+            line(row, para(4, lead: 16)); i += 1; continue
+        }
+        if let m = t.range(of: #"^\d+\.\s"#, options: .regularExpression) {
+            let row = NSMutableAttributedString(string: String(t[m]), attributes: [.font: NSFont.systemFont(ofSize: size, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor])
+            row.append(mdInline(String(t[m.upperBound...]), base: .systemFont(ofSize: size), color: body))
+            line(row, para(4, lead: 18)); i += 1; continue
+        }
+        line(mdInline(t, base: .systemFont(ofSize: size), color: body), para(9, ls: 4.5)); i += 1
+    }
+    return out
+}
+
+// MARK: - Detail screen (two-column: GitHub-style SKILL.md + sticky sidebar, avatar header)
 
 final class SkillDetailView: NSView {
     var onBack: (() -> Void)?
@@ -1057,27 +1292,20 @@ final class SkillDetailView: NSView {
     var onToggleFavorite: ((Skill) -> Void)?
     var onOrganize: ((Skill, NSView) -> Void)?
     private var skill: Skill?
+    private var artToken = 0
 
-    // nav chrome (collapsed when hosted in the SwiftUI NavigationStack)
     private let backBar = NSView()
     private let topDivider = NSBox()
     private var backBarHeight: NSLayoutConstraint!
 
-    // header banner
     private let banner = SkillArtView()
     private let bannerName = NSTextField(labelWithString: "")
     private let bannerPillBox = NSView()
     private let bannerPillLabel = NSTextField(labelWithString: "")
     private let bannerStatus = NSTextField(labelWithString: "")
 
-    // left column (scrollable SKILL.md)
-    private let leftContent = NSStackView()
-    private let fmTable = NSStackView()
-    private let bodyLabel = NSTextField(wrappingLabelWithString: "")
-
-    // right sidebar (sticky)
+    private let bodyTextView = NSTextView()
     private let sidebarStack = NSStackView()
-    private var copiedWork: DispatchWorkItem?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1093,7 +1321,6 @@ final class SkillDetailView: NSView {
     }
 
     private func build() {
-        // --- back bar ---
         backBar.translatesAutoresizingMaskIntoConstraints = false
         addSubview(backBar)
         let back = NSButton(title: "All skills", target: self, action: #selector(backTapped))
@@ -1108,9 +1335,7 @@ final class SkillDetailView: NSView {
         topDivider.translatesAutoresizingMaskIntoConstraints = false
         addSubview(topDivider)
 
-        // --- header banner ---
         banner.translatesAutoresizingMaskIntoConstraints = false
-        banner.subjectFraction = 0.7
         addSubview(banner)
         bannerName.font = .systemFont(ofSize: 24, weight: .bold)
         bannerName.textColor = .white
@@ -1119,7 +1344,7 @@ final class SkillDetailView: NSView {
         banner.addSubview(bannerName)
         bannerPillBox.wantsLayer = true
         bannerPillBox.layer?.cornerRadius = 11
-        bannerPillBox.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.45).cgColor
+        bannerPillBox.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.5).cgColor
         bannerPillBox.translatesAutoresizingMaskIntoConstraints = false
         bannerPillLabel.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
         bannerPillLabel.textColor = .white
@@ -1131,27 +1356,32 @@ final class SkillDetailView: NSView {
         bannerStatus.translatesAutoresizingMaskIntoConstraints = false
         banner.addSubview(bannerStatus)
 
-        // --- body row: left scroll + sidebar scroll ---
         let bodyRow = NSView()
         bodyRow.translatesAutoresizingMaskIntoConstraints = false
         addSubview(bodyRow)
 
+        // left: a real text view renders the SKILL.md (selectable, clickable links)
         let leftScroll = NSScrollView()
         leftScroll.translatesAutoresizingMaskIntoConstraints = false
         leftScroll.hasVerticalScroller = true
         leftScroll.drawsBackground = false
         leftScroll.borderType = .noBorder
         bodyRow.addSubview(leftScroll)
-        let leftClip = leftScroll.contentView
-        let leftDoc = FlippedView()
-        leftDoc.translatesAutoresizingMaskIntoConstraints = false
-        leftScroll.documentView = leftDoc
-        leftContent.orientation = .vertical
-        leftContent.alignment = .leading
-        leftContent.spacing = 16
-        leftContent.translatesAutoresizingMaskIntoConstraints = false
-        leftDoc.addSubview(leftContent)
+        bodyTextView.isEditable = false
+        bodyTextView.isSelectable = true
+        bodyTextView.drawsBackground = false
+        bodyTextView.textContainerInset = NSSize(width: 26, height: 24)
+        bodyTextView.isVerticallyResizable = true
+        bodyTextView.isHorizontallyResizable = false
+        bodyTextView.autoresizingMask = [.width]
+        bodyTextView.textContainer?.widthTracksTextView = true
+        bodyTextView.linkTextAttributes = [
+            .foregroundColor: NSColor.linkColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .cursor: NSCursor.pointingHand]
+        leftScroll.documentView = bodyTextView
 
+        // right: sticky sidebar (own scroll)
         let sidebarScroll = NSScrollView()
         sidebarScroll.translatesAutoresizingMaskIntoConstraints = false
         sidebarScroll.hasVerticalScroller = true
@@ -1169,17 +1399,6 @@ final class SkillDetailView: NSView {
         sidebarStack.spacing = 14
         sidebarStack.translatesAutoresizingMaskIntoConstraints = false
         sideDoc.addSubview(sidebarStack)
-
-        // SKILL.md card holds the frontmatter table; the body label follows it.
-        fmTable.orientation = .vertical
-        fmTable.alignment = .leading
-        fmTable.spacing = 0
-        fmTable.translatesAutoresizingMaskIntoConstraints = false
-        let mdCard = card(headerLeft: "SKILL.md", headerRight: "read only", body: fmTable)
-        leftContent.addArrangedSubview(mdCard)
-        bodyLabel.isSelectable = true
-        bodyLabel.translatesAutoresizingMaskIntoConstraints = false
-        leftContent.addArrangedSubview(bodyLabel)
 
         backBarHeight = backBar.heightAnchor.constraint(equalToConstant: 40)
         NSLayoutConstraint.activate([
@@ -1218,16 +1437,6 @@ final class SkillDetailView: NSView {
             leftScroll.leadingAnchor.constraint(equalTo: bodyRow.leadingAnchor),
             leftScroll.bottomAnchor.constraint(equalTo: bodyRow.bottomAnchor),
             leftScroll.trailingAnchor.constraint(equalTo: sidebarScroll.leadingAnchor),
-            leftDoc.topAnchor.constraint(equalTo: leftClip.topAnchor),
-            leftDoc.leadingAnchor.constraint(equalTo: leftClip.leadingAnchor),
-            leftDoc.trailingAnchor.constraint(equalTo: leftClip.trailingAnchor),
-            leftDoc.widthAnchor.constraint(equalTo: leftClip.widthAnchor),
-            leftContent.topAnchor.constraint(equalTo: leftDoc.topAnchor, constant: 20),
-            leftContent.leadingAnchor.constraint(equalTo: leftDoc.leadingAnchor, constant: 24),
-            leftContent.trailingAnchor.constraint(equalTo: leftDoc.trailingAnchor, constant: -20),
-            leftContent.bottomAnchor.constraint(equalTo: leftDoc.bottomAnchor, constant: -24),
-            mdCard.widthAnchor.constraint(equalTo: leftContent.widthAnchor),
-            bodyLabel.widthAnchor.constraint(equalTo: leftContent.widthAnchor),
 
             sidebarScroll.topAnchor.constraint(equalTo: bodyRow.topAnchor),
             sidebarScroll.bottomAnchor.constraint(equalTo: bodyRow.bottomAnchor),
@@ -1244,43 +1453,24 @@ final class SkillDetailView: NSView {
         ])
     }
 
-    // --- card + row builders ---
-    private func card(headerLeft: String?, headerRight: String? = nil, body: NSView) -> NSView {
+    private func card(_ title: String?, _ content: NSView) -> NSView {
         let c = NSView()
         c.wantsLayer = true
-        c.layer?.cornerRadius = 12
-        c.layer?.borderWidth = 1
+        c.layer?.cornerRadius = 12; c.layer?.borderWidth = 1
         c.layer?.borderColor = NSColor.separatorColor.cgColor
         c.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         c.translatesAutoresizingMaskIntoConstraints = false
         let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 10
+        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
         stack.translatesAutoresizingMaskIntoConstraints = false
-        if let headerLeft = headerLeft {
-            let h = NSTextField(labelWithString: headerLeft)
-            h.font = skelfFont(.caption2, .semibold)
-            h.textColor = .secondaryLabelColor
-            h.translatesAutoresizingMaskIntoConstraints = false
-            if let hr = headerRight {
-                let r = NSTextField(labelWithString: hr.uppercased())
-                r.font = skelfFont(.caption2, .semibold)
-                r.textColor = .tertiaryLabelColor
-                r.translatesAutoresizingMaskIntoConstraints = false
-                let row = NSStackView(views: [h, NSView(), r])
-                row.orientation = .horizontal
-                row.distribution = .fill
-                row.translatesAutoresizingMaskIntoConstraints = false
-                stack.addArrangedSubview(row)
-                row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-            } else {
-                stack.addArrangedSubview(h)
-            }
+        if let title = title {
+            let h = NSTextField(labelWithString: title.uppercased())
+            h.font = skelfFont(.caption2, .semibold); h.textColor = .secondaryLabelColor
+            stack.addArrangedSubview(h)
         }
-        body.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(body)
-        body.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        content.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(content)
+        content.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         c.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: c.topAnchor, constant: 14),
@@ -1291,28 +1481,6 @@ final class SkillDetailView: NSView {
         return c
     }
 
-    private func fmRow(_ key: String, _ value: String) -> NSView {
-        let k = NSTextField(labelWithString: key)
-        k.font = skelfFont(.caption1, .semibold)
-        k.textColor = .systemRed
-        k.alignment = .left
-        k.translatesAutoresizingMaskIntoConstraints = false
-        k.widthAnchor.constraint(equalToConstant: 92).isActive = true
-        k.setContentHuggingPriority(.required, for: .horizontal)
-        let v = NSTextField(wrappingLabelWithString: value)
-        v.font = skelfFont(.callout)
-        v.textColor = .labelColor
-        v.isSelectable = true
-        v.translatesAutoresizingMaskIntoConstraints = false
-        let row = NSStackView(views: [k, v])
-        row.orientation = .horizontal
-        row.alignment = .top
-        row.spacing = 12
-        row.edgeInsets = NSEdgeInsets(top: 10, left: 0, bottom: 10, right: 0)
-        row.translatesAutoresizingMaskIntoConstraints = false
-        return row
-    }
-
     private func metaRow(_ key: String, _ value: String) -> NSView {
         let k = NSTextField(labelWithString: key.uppercased())
         k.font = skelfFont(.caption2, .semibold); k.textColor = .tertiaryLabelColor
@@ -1320,8 +1488,7 @@ final class SkillDetailView: NSView {
         k.widthAnchor.constraint(equalToConstant: 78).isActive = true
         let v = NSTextField(labelWithString: value)
         v.font = skelfFont(.callout); v.textColor = .labelColor
-        v.lineBreakMode = .byTruncatingMiddle
-        v.isSelectable = true
+        v.lineBreakMode = .byTruncatingMiddle; v.isSelectable = true
         v.translatesAutoresizingMaskIntoConstraints = false
         let row = NSStackView(views: [k, v])
         row.orientation = .horizontal; row.alignment = .firstBaseline; row.spacing = 8
@@ -1340,136 +1507,84 @@ final class SkillDetailView: NSView {
         return b
     }
 
-    private func monoChip(_ text: String, _ action: Selector) -> NSView {
-        let box = NSView()
-        box.wantsLayer = true
-        box.layer?.cornerRadius = 8
-        box.layer?.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.6).cgColor
-        box.layer?.borderWidth = 1
-        box.layer?.borderColor = NSColor.separatorColor.cgColor
-        box.translatesAutoresizingMaskIntoConstraints = false
-        let label = NSTextField(labelWithString: text)
-        label.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        label.textColor = .labelColor
-        label.lineBreakMode = .byTruncatingTail
-        label.isSelectable = true
-        label.translatesAutoresizingMaskIntoConstraints = false
-        let copy = NSButton(image: NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy")!, target: self, action: action)
-        copy.isBordered = false
-        copy.contentTintColor = .secondaryLabelColor
-        copy.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(label); box.addSubview(copy)
-        NSLayoutConstraint.activate([
-            box.heightAnchor.constraint(equalToConstant: 34),
-            label.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 10),
-            label.centerYAnchor.constraint(equalTo: box.centerYAnchor),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: copy.leadingAnchor, constant: -6),
-            copy.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -8),
-            copy.centerYAnchor.constraint(equalTo: box.centerYAnchor),
-        ])
-        return box
-    }
-
     func configure(_ skill: Skill, isFavorite: Bool) {
         self.skill = skill
-        banner.configure(skill.name, enabled: skill.enabled)
+        artToken += 1
+        let token = artToken
+        let creator = skill.source.contains("/") ? skill.source.split(separator: "/").first.map(String.init) : nil
+        banner.setGradient(skill.name)
+        if let creator = creator {
+            if let img = AvatarStore.shared.cached(creator) { banner.setAvatar(img) }
+            else { AvatarStore.shared.fetch(creator) { [weak self] img in
+                guard let self = self, self.artToken == token, let img = img else { return }
+                self.banner.setAvatar(img) } }
+        }
         bannerName.stringValue = skill.name
         bannerPillLabel.stringValue = skill.initiator
         bannerStatus.stringValue = skill.enabled ? "● Enabled" : "○ Installed · off"
         bannerStatus.textColor = skill.enabled ? NSColor.systemGreen : NSColor.white.withAlphaComponent(0.8)
 
-        // read the file for the frontmatter table + body
+        // left column: Summary + the GitHub-style SKILL.md
         let raw = (try? String(contentsOfFile: skill.skillMDPath, encoding: .utf8)) ?? ""
-        let (rows, body) = splitFrontmatter(raw)
+        let (_, body) = splitFrontmatter(raw)
+        let doc = NSMutableAttributedString()
+        let hp = NSMutableParagraphStyle(); hp.paragraphSpacing = 6
+        doc.append(NSAttributedString(string: "SUMMARY\n", attributes: [
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: NSColor.secondaryLabelColor,
+            .kern: 0.5, .paragraphStyle: hp]))
+        let sp = NSMutableParagraphStyle(); sp.lineSpacing = 4; sp.paragraphSpacing = 16
+        doc.append(NSAttributedString(string: (skill.description.isEmpty ? "No description in SKILL.md." : skill.description) + "\n",
+            attributes: [.font: NSFont.systemFont(ofSize: 14.5), .foregroundColor: NSColor.labelColor, .paragraphStyle: sp]))
+        let bodyTrim = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !bodyTrim.isEmpty { doc.append(renderGitHubMarkdown(bodyTrim)) }
+        bodyTextView.textStorage?.setAttributedString(doc)
+        bodyTextView.scroll(.zero)
 
-        fmTable.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let wanted = ["name", "description", "version", "license"]
-        var shown = 0
-        for key in wanted {
-            if let pair = rows.first(where: { $0.0 == key }), !pair.1.isEmpty {
-                if shown > 0 { fmTable.addArrangedSubview(hairline()) }
-                let r = fmRow(key, pair.1); fmTable.addArrangedSubview(r)
-                r.widthAnchor.constraint(equalTo: fmTable.widthAnchor).isActive = true
-                shown += 1
-            }
-        }
-        if shown == 0 {
-            let r = fmRow("name", skill.name); fmTable.addArrangedSubview(r)
-            r.widthAnchor.constraint(equalTo: fmTable.widthAnchor).isActive = true
-            fmTable.addArrangedSubview(hairline())
-            let d = fmRow("description", skill.description); fmTable.addArrangedSubview(d)
-            d.widthAnchor.constraint(equalTo: fmTable.widthAnchor).isActive = true
-        }
-
-        let bodyText = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        bodyLabel.attributedStringValue = bodyText.isEmpty
-            ? NSAttributedString(string: "This skill's SKILL.md has no content beyond its frontmatter.",
-                                 attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor])
-            : renderSkillMarkdown(bodyText)
-
-        rebuildSidebar(skill, isFavorite: isFavorite)
+        rebuildSidebar(skill, isFavorite: isFavorite, creator: creator, token: token)
     }
 
-    private func hairline() -> NSView {
-        let v = NSBox(); v.boxType = .separator
-        v.translatesAutoresizingMaskIntoConstraints = false
-        v.heightAnchor.constraint(equalToConstant: 1).isActive = true
-        return v
-    }
-
-    private func rebuildSidebar(_ skill: Skill, isFavorite: Bool) {
+    private func rebuildSidebar(_ skill: Skill, isFavorite: Bool, creator: String?, token: Int) {
         sidebarStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let creator = FolderStore.creatorName(skill.source)
+        let creatorName = creator ?? "Local"
 
-        // Source card
+        // Source card (avatar + repo + View on GitHub)
         let avatar = SkillArtView(); avatar.translatesAutoresizingMaskIntoConstraints = false
-        avatar.layer?.cornerRadius = 8; avatar.subjectFraction = 0.7; avatar.showScrim = false
-        avatar.configure(creator)
-        avatar.widthAnchor.constraint(equalToConstant: 34).isActive = true
-        avatar.heightAnchor.constraint(equalToConstant: 34).isActive = true
-        let creatorName = NSTextField(labelWithString: creator)
-        creatorName.font = skelfFont(.callout, .semibold)
-        let repoName = NSTextField(labelWithString: skill.source)
-        repoName.font = skelfFont(.caption1); repoName.textColor = .secondaryLabelColor
-        repoName.lineBreakMode = .byTruncatingMiddle
-        let nameCol = NSStackView(views: [creatorName, repoName])
+        avatar.layer?.cornerRadius = 8; avatar.showScrim = false
+        avatar.setGradient(creatorName)
+        if let creator = creator {
+            if let img = AvatarStore.shared.cached(creator) { avatar.setAvatar(img) }
+            else { AvatarStore.shared.fetch(creator) { [weak self] img in
+                guard let self = self, self.artToken == token, let img = img else { return }
+                avatar.setAvatar(img) } }
+        }
+        avatar.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        avatar.heightAnchor.constraint(equalToConstant: 36).isActive = true
+        let cName = NSTextField(labelWithString: creatorName); cName.font = skelfFont(.callout, .semibold)
+        let repo = NSTextField(labelWithString: skill.source); repo.font = skelfFont(.caption1)
+        repo.textColor = .secondaryLabelColor; repo.lineBreakMode = .byTruncatingMiddle
+        let nameCol = NSStackView(views: [cName, repo])
         nameCol.orientation = .vertical; nameCol.alignment = .leading; nameCol.spacing = 1
         let idRow = NSStackView(views: [avatar, nameCol])
         idRow.orientation = .horizontal; idRow.alignment = .centerY; idRow.spacing = 10
         idRow.translatesAutoresizingMaskIntoConstraints = false
         let ghBtn = sidebarButton("View on GitHub", "arrow.up.right.square", #selector(githubTapped))
-        let crBtn = sidebarButton("Creator's Repositories", "person.crop.square.badge.camera", #selector(creatorTapped))
         ghBtn.isEnabled = skill.githubURL != nil
-        crBtn.isEnabled = skill.source.contains("/")
-        let srcStack = NSStackView(views: [idRow, ghBtn, crBtn])
-        srcStack.orientation = .vertical; srcStack.alignment = .leading; srcStack.spacing = 8
+        let srcStack = NSStackView(views: [idRow, ghBtn])
+        srcStack.orientation = .vertical; srcStack.alignment = .leading; srcStack.spacing = 10
         srcStack.translatesAutoresizingMaskIntoConstraints = false
-        let srcCard = card(headerLeft: "Source", body: srcStack)
-        sidebarStack.addArrangedSubview(srcCard)
-        srcCard.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor).isActive = true
-        for b in [ghBtn, crBtn] { b.widthAnchor.constraint(equalTo: srcStack.widthAnchor).isActive = true }
+        addCard(card("Source", srcStack))
         idRow.widthAnchor.constraint(equalTo: srcStack.widthAnchor).isActive = true
+        ghBtn.widthAnchor.constraint(equalTo: srcStack.widthAnchor).isActive = true
 
-        // Command card — copy the slash command, plus the install command
-        let cmdStack = NSStackView()
+        // Slash command card (Copy only)
+        let copyBtn = sidebarButton("Copy  \(skill.initiator)", "doc.on.clipboard", #selector(copySlashTapped), prominent: true)
+        let cmdStack = NSStackView(views: [copyBtn])
         cmdStack.orientation = .vertical; cmdStack.alignment = .leading; cmdStack.spacing = 8
         cmdStack.translatesAutoresizingMaskIntoConstraints = false
-        let copyBtn = sidebarButton("Copy  \(skill.initiator)", "doc.on.clipboard", #selector(copySlashTapped), prominent: true)
-        cmdStack.addArrangedSubview(copyBtn)
+        addCard(card("Slash command", cmdStack))
         copyBtn.widthAnchor.constraint(equalTo: cmdStack.widthAnchor).isActive = true
-        if skill.source.contains("/") {
-            let inst = NSTextField(labelWithString: "Install")
-            inst.font = skelfFont(.caption2, .semibold); inst.textColor = .tertiaryLabelColor
-            cmdStack.addArrangedSubview(inst)
-            let chip = monoChip("npx skills add \(skill.source)", #selector(copyInstallTapped))
-            cmdStack.addArrangedSubview(chip)
-            chip.widthAnchor.constraint(equalTo: cmdStack.widthAnchor).isActive = true
-        }
-        let cmdCard = card(headerLeft: "Slash command", body: cmdStack)
-        sidebarStack.addArrangedSubview(cmdCard)
-        cmdCard.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor).isActive = true
 
-        // Details card — compact meta
+        // Details
         let meta = NSStackView()
         meta.orientation = .vertical; meta.alignment = .leading; meta.spacing = 7
         meta.translatesAutoresizingMaskIntoConstraints = false
@@ -1478,11 +1593,9 @@ final class SkillDetailView: NSView {
         meta.addArrangedSubview(metaRow("Category", skill.category))
         meta.addArrangedSubview(metaRow("Files", "\(skill.fileCount)"))
         meta.addArrangedSubview(metaRow("Installed", skill.installedAt))
-        let metaCard = card(headerLeft: "Details", body: meta)
-        sidebarStack.addArrangedSubview(metaCard)
-        metaCard.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor).isActive = true
+        addCard(card("Details", meta))
 
-        // Actions card
+        // Actions
         let favBtn = sidebarButton(isFavorite ? "Favorited" : "Favorite", isFavorite ? "star.fill" : "star", #selector(favoriteTapped))
         favBtn.contentTintColor = isFavorite ? .systemYellow : nil
         let folderBtn = sidebarButton("Add to Folder…", "folder.badge.plus", #selector(organizeTapped))
@@ -1490,32 +1603,25 @@ final class SkillDetailView: NSView {
         let actStack = NSStackView(views: [favBtn, folderBtn, revealBtn])
         actStack.orientation = .vertical; actStack.alignment = .leading; actStack.spacing = 8
         actStack.translatesAutoresizingMaskIntoConstraints = false
-        let actCard = card(headerLeft: nil, body: actStack)
-        sidebarStack.addArrangedSubview(actCard)
-        actCard.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor).isActive = true
+        addCard(card(nil, actStack))
         for b in [favBtn, folderBtn, revealBtn] { b.widthAnchor.constraint(equalTo: actStack.widthAnchor).isActive = true }
+    }
+
+    private func addCard(_ c: NSView) {
+        sidebarStack.addArrangedSubview(c)
+        c.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor).isActive = true
     }
 
     @objc private func backTapped() { onBack?() }
     @objc private func favoriteTapped() { if let s = skill { onToggleFavorite?(s) } }
     @objc private func organizeTapped() { if let s = skill { onOrganize?(s, sidebarStack) } }
     @objc private func copySlashTapped() { if let s = skill { onCopy?(s) } }
-    @objc private func copyInstallTapped() {
-        guard let s = skill, s.source.contains("/") else { return }
-        let pb = NSPasteboard.general; pb.clearContents()
-        pb.setString("npx skills add \(s.source)", forType: .string)
-    }
     @objc private func revealTapped() {
         guard let skill = skill else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: skill.skillMDPath)])
     }
     @objc private func githubTapped() {
         guard let url = skill?.githubURL else { return }
-        NSWorkspace.shared.open(url)
-    }
-    @objc private func creatorTapped() {
-        guard let s = skill, let c = s.source.split(separator: "/").first,
-              let url = URL(string: "https://github.com/\(c)") else { return }
         NSWorkspace.shared.open(url)
     }
 }
@@ -1598,6 +1704,8 @@ final class GridCollectionView: NSCollectionView {
     }
 }
 
+// A flow layout that sizes cards to FILL each row evenly (justified) for a target
+// column width, at any window width — no ragged right-hand gap.
 // The grid for ONE folder. Navigation + toolbar live in SwiftUI; this renders the
 // folder's entries, handles drag/drop/reorder + per-tile menus, and reports clicks.
 final class GridViewController: NSViewController, NSCollectionViewDataSource, NSCollectionViewDelegate {
@@ -1632,10 +1740,10 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
         root.addSubview(gridScroll)
 
         let layout = NSCollectionViewFlowLayout()
-        layout.itemSize = NSSize(width: 224, height: 298)
-        layout.minimumInteritemSpacing = 16
-        layout.minimumLineSpacing = 18
-        layout.sectionInset = NSEdgeInsets(top: 18, left: 20, bottom: 18, right: 20)
+        layout.itemSize = NSSize(width: 224, height: 300)
+        layout.minimumInteritemSpacing = 18
+        layout.minimumLineSpacing = 20
+        layout.sectionInset = NSEdgeInsets(top: 20, left: 22, bottom: 24, right: 22)
         collectionView.collectionViewLayout = layout
         collectionView.dataSource = self
         collectionView.delegate = self
@@ -1659,6 +1767,19 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource, NS
     }
 
     override func viewDidLoad() { super.viewDidLoad(); reload() }
+
+    // Size cards to fill each row evenly for the current width (justified, responsive).
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        guard let layout = collectionView.collectionViewLayout as? NSCollectionViewFlowLayout else { return }
+        let avail = collectionView.bounds.width - layout.sectionInset.left - layout.sectionInset.right
+        guard avail > 1 else { return }
+        let target: CGFloat = 232, gap = layout.minimumInteritemSpacing
+        let cols = max(1, floor((avail + gap) / (target + gap)))
+        let w = floor((avail - (cols - 1) * gap) / cols)
+        let size = NSSize(width: max(150, w), height: floor(max(150, w) * 300.0 / 224.0))
+        if layout.itemSize != size { layout.itemSize = size; layout.invalidateLayout() }
+    }
 
     /// Called by the SwiftUI host whenever search / filter / data changes.
     func apply(query: String, filter: Int, token: Int) {
@@ -1952,26 +2073,17 @@ struct FolderScreen: View {
     let model: SkelfModel
     let folderId: String
     @State private var query = ""
-    @State private var filter = 0
 
     var body: some View {
         let token = model.reloadToken
         let hasClip = model.clip != nil
         let clipName = model.clip?.name ?? ""
-        GridRepresentable(model: model, folderId: folderId, query: query, filter: filter, token: token,
+        GridRepresentable(model: model, folderId: folderId, query: query, filter: 0, token: token,
                           onOpenSkill: { model.path.append(.skill($0)) },
                           onOpenFolder: { model.path.append(.folder($0)) })
             .navigationTitle(folderId == model.folders.rootId ? "Skelf" : model.folderName(folderId))
             .searchable(text: $query, prompt: "Search this folder")
             .toolbar {
-                ToolbarItem {
-                    Picker("Filter", selection: $filter) {
-                        Text("All").tag(0)
-                        Text("Enabled").tag(1)
-                        Text("Off").tag(2)
-                    }
-                    .pickerStyle(.menu)
-                }
                 if hasClip {
                     ToolbarItem {
                         Button { model.pasteInto(folderId) } label: {
