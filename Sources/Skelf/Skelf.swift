@@ -1168,6 +1168,7 @@ final class RowThumb: NSView {
 // The card's root view: rounded, with a soft drop shadow that fades in on hover.
 final class CardRootView: NSView {
     var corner: CGFloat = 22
+    var onLayout: (() -> Void)?
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
@@ -1180,6 +1181,7 @@ final class CardRootView: NSView {
     override func layout() {
         super.layout()
         layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: corner, cornerHeight: corner, transform: nil)
+        onLayout?()
     }
 }
 
@@ -1255,6 +1257,13 @@ final class SkillGridItem: NSCollectionViewItem {
 
     override func loadView() {
         let root = CardRootView()
+        // Tell the wrapping description label its real width so it wraps to 2 lines instead
+        // of computing a single-line intrinsic height and truncating.
+        root.onLayout = { [weak self, weak root] in
+            guard let self = self, let root = root else { return }
+            let w = max(0, root.bounds.width - 28)
+            if abs(self.descLabel.preferredMaxLayoutWidth - w) > 0.5 { self.descLabel.preferredMaxLayoutWidth = w }
+        }
         art.translatesAutoresizingMaskIntoConstraints = false
         art.layer?.cornerRadius = 22
         root.addSubview(art)
@@ -1273,7 +1282,8 @@ final class SkillGridItem: NSCollectionViewItem {
         descLabel.font = .systemFont(ofSize: 12)
         descLabel.textColor = NSColor.white.withAlphaComponent(0.82)
         descLabel.maximumNumberOfLines = 2
-        descLabel.lineBreakMode = .byTruncatingTail
+        descLabel.lineBreakMode = .byWordWrapping       // wrap to 2 lines…
+        descLabel.cell?.truncatesLastVisibleLine = true // …then ellipsize the 2nd
         descLabel.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(descLabel)
 
@@ -1304,6 +1314,7 @@ final class SkillGridItem: NSCollectionViewItem {
 
             descLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             descLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            descLabel.heightAnchor.constraint(equalToConstant: 32),   // a fixed 2-line zone
             descLabel.bottomAnchor.constraint(equalTo: copyButton.topAnchor, constant: -10),
 
             nameLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
@@ -1799,7 +1810,7 @@ final class SkillDetailView: NSView {
         addSubview(banner)
         banner.toolTip = "Click for details about this painting"
         banner.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(bannerClicked)))
-        bannerName.font = .systemFont(ofSize: 24, weight: .bold)
+        bannerName.font = .systemFont(ofSize: 28, weight: .bold)   // the page title — clearly largest
         bannerName.textColor = .white
         bannerName.lineBreakMode = .byTruncatingTail
         bannerName.translatesAutoresizingMaskIntoConstraints = false
@@ -2321,12 +2332,19 @@ final class SkillDetailView: NSView {
         idRow.widthAnchor.constraint(equalTo: srcStack.widthAnchor).isActive = true
         for b in [ghBtn, crBtn] { b.widthAnchor.constraint(equalTo: srcStack.widthAnchor).isActive = true }
 
-        // Slash command card (Copy only)
-        let copyBtn = sidebarButton("Copy  \(skill.initiator)", "doc.on.clipboard", #selector(copySlashTapped), prominent: true)
-        let cmdStack = NSStackView(views: [copyBtn])
-        cmdStack.orientation = .vertical; cmdStack.alignment = .leading; cmdStack.spacing = 8
+        // Slash command card: the command as a monospace caption, then a Copy button (so the
+        // command — the whole point — is never truncated inside the button).
+        let slug = NSTextField(labelWithString: skill.initiator)
+        slug.font = .monospacedSystemFont(ofSize: 12.5, weight: .medium)
+        slug.textColor = .labelColor
+        slug.lineBreakMode = .byTruncatingMiddle
+        slug.translatesAutoresizingMaskIntoConstraints = false
+        let copyBtn = sidebarButton("Copy command", "doc.on.clipboard", #selector(copySlashTapped), prominent: true)
+        let cmdStack = NSStackView(views: [slug, copyBtn])
+        cmdStack.orientation = .vertical; cmdStack.alignment = .leading; cmdStack.spacing = 9
         cmdStack.translatesAutoresizingMaskIntoConstraints = false
         addCard(card("Slash command", cmdStack))
+        slug.widthAnchor.constraint(equalTo: cmdStack.widthAnchor).isActive = true
         copyBtn.widthAnchor.constraint(equalTo: cmdStack.widthAnchor).isActive = true
 
         // Details
@@ -3308,7 +3326,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         backButton.imagePosition = .imageOnly
         backButton.isBordered = false
         backButton.focusRingType = .none
-        backButton.contentTintColor = .controlAccentColor
+        backButton.contentTintColor = .secondaryLabelColor
         backButton.target = self
         backButton.action = #selector(goBack)
         backButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
@@ -3319,18 +3337,18 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         windowButton.imagePosition = .imageOnly
         windowButton.isBordered = false
         windowButton.focusRingType = .none
-        windowButton.contentTintColor = .controlAccentColor
+        windowButton.contentTintColor = .secondaryLabelColor   // neutral chrome, not the accent
         windowButton.toolTip = "Open Skelf window"
         windowButton.target = self
         windowButton.action = #selector(openApp)
         windowButton.translatesAutoresizingMaskIntoConstraints = false
         windowButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
 
-        optionsButton.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "Options")
+        optionsButton.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "Options")
         optionsButton.imagePosition = .imageOnly
         optionsButton.isBordered = false
         optionsButton.focusRingType = .none
-        optionsButton.contentTintColor = .controlAccentColor
+        optionsButton.contentTintColor = .secondaryLabelColor
         optionsButton.toolTip = "Settings & options"
         optionsButton.target = self
         optionsButton.action = #selector(showOptions)
