@@ -233,7 +233,7 @@ final class ArtStore {
             guard let self = self else { return }
             guard let url = url else { self.deliver(id, nil); return }
             var req = URLRequest(url: url)
-            req.setValue("Skelf/1.0 (skill art)", forHTTPHeaderField: "User-Agent")
+            req.setValue("Skelf/\(skelfShortVersion) (skill art)", forHTTPHeaderField: "User-Agent")
             // The Art Institute of Chicago's IIIF image server requires this header (else 403).
             req.setValue("Skelf (https://github.com/devbyshima/Skelf)", forHTTPHeaderField: "AIC-User-Agent")
             URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
@@ -324,7 +324,7 @@ func artSymbol(for skill: Skill) -> String {
         ("pre-commit", "checkmark.shield"), ("guardrail", "shield.lefthalf.filled"),
         ("shoehorn", "shippingbox"), ("migrate", "arrow.up.forward.square"),
         ("principle", "list.number"), ("fragment", "puzzlepiece"), ("shape", "scribble"),
-        ("beat", "metronome"), ("ubiquitous", "character.bubble"), ("exercise", "figure.run"),
+        ("beat", "metronome"), ("ubiquitous", "character.bubble"), ("exercise", "figure.run")
     ]
     for (kw, sym) in table where hay.contains(kw) { return sym }
     // category-based default, else a generic spark
@@ -362,7 +362,7 @@ func artKeyword(for skill: Skill) -> String {
         ("migrate", "caravan"), ("shoehorn", "harbor"),
         ("principle", "geometry"), ("fragment", "mosaic"), ("shape", "sculptor"),
         ("beat", "orchestra"), ("exercise", "gymnasium"), ("implement", "blacksmith"),
-        ("setup", "workshop"), ("config", "workshop"), ("scan", "panorama"),
+        ("setup", "workshop"), ("config", "workshop"), ("scan", "panorama")
     ]
     for (kw, subj) in table where hay.contains(kw) { return subj }
     // Fall back to the skill's own first name word, else a safe broad subject.

@@ -63,9 +63,7 @@ final class SkelfModel {
 
     func pasteInto(_ folderId: String) {
         guard let c = clip else { return }
-        if c.isFolder { folders.moveFolder(c.id, to: folderId); clip = nil }
-        else if c.cut { folders.moveSkill(c.id, from: c.source, to: folderId); clip = nil }
-        else { folders.copySkill(c.id, to: folderId) }   // keep clip for multi-paste
+        if c.isFolder { folders.moveFolder(c.id, to: folderId); clip = nil } else if c.cut { folders.moveSkill(c.id, from: c.source, to: folderId); clip = nil } else { folders.copySkill(c.id, to: folderId) }   // keep clip for multi-paste
         Sound.play(.move)
     }
 }
@@ -278,4 +276,3 @@ struct DetailRepresentable: NSViewRepresentable {
 }
 
 // MARK: - Menu-bar popover (Passwords-style: Favorites + Folders containers)
-

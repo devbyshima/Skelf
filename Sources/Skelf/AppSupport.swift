@@ -103,7 +103,11 @@ enum AppAppearance: String, CaseIterable, Identifiable {
     case system, light, dark
     var id: String { rawValue }
     var label: String {
-        switch self { case .system: return "Follow System"; case .light: return "Light"; case .dark: return "Dark" }
+        switch self {
+        case .system: return "Follow System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
     }
     var nsAppearance: NSAppearance? {
         switch self {
@@ -165,8 +169,7 @@ final class AppSettings {
         didSet {
             guard !applyingLogin, launchAtLogin != oldValue else { return }
             do {
-                if launchAtLogin { try SMAppService.mainApp.register() }
-                else { try SMAppService.mainApp.unregister() }
+                if launchAtLogin { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             } catch {
                 applyingLogin = true                       // system rejected it → reflect real state
                 launchAtLogin = (SMAppService.mainApp.status == .enabled)

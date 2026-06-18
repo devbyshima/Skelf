@@ -53,7 +53,7 @@ final class MetaCardView: NSView {
             stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 56),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 56)
         ])
         keyLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         valueLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -185,9 +185,9 @@ func renderGitHubMarkdown(_ md: String) -> NSAttributedString {
             line(NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: 4)]), para(8, before: 6)); i += 1; continue
         }
         if t.hasPrefix("#### ") { line(mdInline(String(t.dropFirst(5)), base: .systemFont(ofSize: 13.5, weight: .semibold), color: body), para(6, before: 12)); i += 1; continue }
-        if t.hasPrefix("### ")  { line(mdInline(String(t.dropFirst(4)), base: .systemFont(ofSize: 15, weight: .semibold), color: body), para(6, before: 14)); i += 1; continue }
-        if t.hasPrefix("## ")   { line(mdInline(String(t.dropFirst(3)), base: .systemFont(ofSize: 18, weight: .bold), color: body), para(8, before: 18)); i += 1; continue }
-        if t.hasPrefix("# ")    { line(mdInline(String(t.dropFirst(2)), base: .systemFont(ofSize: 22, weight: .bold), color: body), para(8, before: 18)); i += 1; continue }
+        if t.hasPrefix("### ") { line(mdInline(String(t.dropFirst(4)), base: .systemFont(ofSize: 15, weight: .semibold), color: body), para(6, before: 14)); i += 1; continue }
+        if t.hasPrefix("## ") { line(mdInline(String(t.dropFirst(3)), base: .systemFont(ofSize: 18, weight: .bold), color: body), para(8, before: 18)); i += 1; continue }
+        if t.hasPrefix("# ") { line(mdInline(String(t.dropFirst(2)), base: .systemFont(ofSize: 22, weight: .bold), color: body), para(8, before: 18)); i += 1; continue }
         if t.hasPrefix("> ") || t == ">" {
             line(mdInline(String(t.dropFirst(t.hasPrefix("> ") ? 2 : 1)), base: .systemFont(ofSize: size), color: .secondaryLabelColor), para(6, lead: 14)); i += 1; continue
         }
@@ -207,4 +207,3 @@ func renderGitHubMarkdown(_ md: String) -> NSAttributedString {
 }
 
 // MARK: - Detail screen (two-column: GitHub-style SKILL.md + sticky sidebar, avatar header)
-

@@ -237,7 +237,7 @@ final class GlassCircleButton: NSView {
             glass.topAnchor.constraint(equalTo: topAnchor),
             glass.bottomAnchor.constraint(equalTo: bottomAnchor),
             glass.leadingAnchor.constraint(equalTo: leadingAnchor),
-            glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+            glass.trailingAnchor.constraint(equalTo: trailingAnchor)
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -339,7 +339,7 @@ final class SkillGridItem: NSCollectionViewItem {
 
             nameLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             nameLabel.bottomAnchor.constraint(equalTo: descLabel.topAnchor, constant: -6),
-            nameLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            nameLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14)
         ])
         nameLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
         root.addTrackingArea(NSTrackingArea(rect: .zero,                  // .mouseMoved → the hover tip follows the pointer
@@ -480,7 +480,7 @@ final class FolderGridItem: NSCollectionViewItem {
             countLabel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
             nameLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             nameLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            nameLabel.bottomAnchor.constraint(equalTo: countLabel.topAnchor, constant: -4),
+            nameLabel.bottomAnchor.constraint(equalTo: countLabel.topAnchor, constant: -4)
         ])
         root.addTrackingArea(NSTrackingArea(rect: .zero,
             options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self, userInfo: nil))
@@ -503,8 +503,7 @@ final class FolderGridItem: NSCollectionViewItem {
         // their skills' paintings (album-cover style); empty folders fall back to a gradient.
         if let creator = node.autoCreator {
             artKey = creator
-            if let img = AvatarStore.shared.cached(creator) { art.setAvatar(img) }
-            else {
+            if let img = AvatarStore.shared.cached(creator) { art.setAvatar(img) } else {
                 art.setGradient(node.name)
                 let key = creator
                 AvatarStore.shared.fetch(creator) { [weak self] img in

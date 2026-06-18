@@ -6,6 +6,8 @@ All notable changes to Skelf are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-19
+
 ### Added
 
 - Browse installed Claude Code skills as a grid of cards, each backed by a unique
@@ -18,11 +20,12 @@ All notable changes to Skelf are documented here. The format is based on
   covers, Refresh Painting Art, Reduce Motion, Play Sounds) and a full macOS menu bar.
 - Live updates via an FSEvents watcher on the skill directories.
 - A minimal Liquid Glass hover tip on cards (name, slash command, creator).
-- CLI modes: `--list`, `--copy`, `--open`, `--popover`.
+- CLI modes: `--version`, `--list`, `--copy`, `--open`, `--enter`, `--popover`.
 
 ### Changed
 
 - Restructured from a single source file into focused files under `Sources/Skelf/`, added a
   SwiftPM `Package.swift` (opens in Xcode / `swift build`), CI, SwiftLint, and contributor docs.
 
-[Unreleased]: https://github.com/devbyshima/Skelf
+[Unreleased]: https://github.com/devbyshima/Skelf/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.0.0

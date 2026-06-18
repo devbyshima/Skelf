@@ -114,7 +114,7 @@ final class ToastWindow: NSPanel {
             glass.topAnchor.constraint(equalTo: container.topAnchor),
             glass.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             glass.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            glass.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            glass.trailingAnchor.constraint(equalTo: container.trailingAnchor)
         ])
 
         let inner = NSView()
@@ -145,7 +145,7 @@ final class ToastWindow: NSPanel {
             label.centerYAnchor.constraint(equalTo: inner.centerYAnchor),
             undoBtn.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 14),
             undoBtn.trailingAnchor.constraint(equalTo: inner.trailingAnchor, constant: -13),
-            undoBtn.centerYAnchor.constraint(equalTo: inner.centerYAnchor),
+            undoBtn.centerYAnchor.constraint(equalTo: inner.centerYAnchor)
         ])
         glass.contentView = inner
     }
@@ -170,7 +170,6 @@ final class ToastWindow: NSPanel {
         label.stringValue = message
         animateIn(width: width, below: popover, dismissAfter: 1.8)
     }
-
 
     private func animateIn(width w: CGFloat, below popover: NSWindow, dismissAfter: TimeInterval) {
         let h: CGFloat = 46
@@ -367,7 +366,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
             contentStack.topAnchor.constraint(equalTo: doc.topAnchor, constant: 4),
             contentStack.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 14),
             contentStack.trailingAnchor.constraint(equalTo: doc.trailingAnchor, constant: -14),
-            contentStack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -10),
+            contentStack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -10)
         ])
         view = root
     }
@@ -432,8 +431,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
                     || $0.description.lowercased().contains(q) || $0.source.lowercased().contains(q)
             }
             let ordered = matched.filter { $0.enabled } + matched.filter { !$0.enabled }
-            if ordered.isEmpty && foundFolders.isEmpty { addEmpty("Nothing matches.") }
-            else {
+            if ordered.isEmpty && foundFolders.isEmpty { addEmpty("Nothing matches.") } else {
                 if !foundFolders.isEmpty { addSection("Folders", foundFolders.map { folderRow($0) }) }
                 if !ordered.isEmpty { addSection("Skills", ordered.map { skillRow($0) }) }
             }
@@ -449,8 +447,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         } else {
             let skills = favorites.ordered(folders.skillIds(in: currentId).compactMap { id in store.skills.first { $0.id == id } })
             let subRows = folders.childFolders(of: currentId).map { folderRow($0) }
-            if skills.isEmpty && subRows.isEmpty { addEmpty("This folder is empty.") }
-            else {
+            if skills.isEmpty && subRows.isEmpty { addEmpty("This folder is empty.") } else {
                 if !skills.isEmpty { addSection("Skills", skills.map { skillRow($0) }) }
                 if !subRows.isEmpty { addSection("Folders", subRows) }
             }
@@ -487,7 +484,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
             l.centerXAnchor.constraint(equalTo: wrap.centerXAnchor),
             l.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: 16),
             l.trailingAnchor.constraint(equalTo: wrap.trailingAnchor, constant: -16),
-            l.bottomAnchor.constraint(equalTo: wrap.bottomAnchor, constant: -10),
+            l.bottomAnchor.constraint(equalTo: wrap.bottomAnchor, constant: -10)
         ])
         contentStack.addArrangedSubview(wrap)
         wrap.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
@@ -557,7 +554,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
             text.centerYAnchor.constraint(equalTo: row.centerYAnchor),
             trailing.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -12),
             trailing.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-            text.trailingAnchor.constraint(lessThanOrEqualTo: trailing.leadingAnchor, constant: -8),
+            text.trailingAnchor.constraint(lessThanOrEqualTo: trailing.leadingAnchor, constant: -8)
         ])
         return row
     }
@@ -599,8 +596,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         t.translatesAutoresizingMaskIntoConstraints = false
         t.widthAnchor.constraint(equalToConstant: 30).isActive = true
         t.heightAnchor.constraint(equalToConstant: 30).isActive = true
-        if let img = ArtStore.shared.cached(skill.id) { t.setImage(img) }
-        else {
+        if let img = ArtStore.shared.cached(skill.id) { t.setImage(img) } else {
             t.setCG(SkillArtView.themedImage(skill))
             ArtStore.shared.fetch(skill) { [weak t] img in
                 guard let t = t, let img = img else { return }; t.setImage(img)
@@ -617,8 +613,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         t.translatesAutoresizingMaskIntoConstraints = false
         t.widthAnchor.constraint(equalToConstant: 30).isActive = true
         t.heightAnchor.constraint(equalToConstant: 30).isActive = true
-        if let img = AvatarStore.shared.cached(creator) { t.setImage(img) }
-        else {
+        if let img = AvatarStore.shared.cached(creator) { t.setImage(img) } else {
             t.setCG(SkillArtView.gradientImage(node.name, monogram: true))
             AvatarStore.shared.fetch(creator) { [weak t] img in
                 guard let t = t, let img = img else { return }; t.setImage(img)
@@ -733,4 +728,3 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
 }
 
 // MARK: - App delegate
-
