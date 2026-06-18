@@ -2465,23 +2465,23 @@ final class ToastWindow: NSPanel {
     override var canBecomeKey: Bool { false }
 
     /// Toast with an Undo button (used after a drop).
-    func present(message: String, below popover: NSWindow, onUndo: @escaping () -> Void) {
+    func present(message: String, width: CGFloat, below popover: NSWindow, onUndo: @escaping () -> Void) {
         self.onUndo = onUndo
         undoBtn.isHidden = false
         iconView.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)
         iconView.contentTintColor = .systemGreen
         label.stringValue = message
-        animateIn(width: popover.frame.width, below: popover, dismissAfter: 4.0)
+        animateIn(width: width, below: popover, dismissAfter: 4.0)
     }
 
     /// Plain message toast (no Undo) — e.g. "Copied /name".
-    func presentMessage(_ message: String, icon: String, below popover: NSWindow) {
+    func presentMessage(_ message: String, icon: String, width: CGFloat, below popover: NSWindow) {
         onUndo = nil
         undoBtn.isHidden = true
         iconView.image = NSImage(systemSymbolName: icon, accessibilityDescription: nil)
         iconView.contentTintColor = .systemGreen
         label.stringValue = message
-        animateIn(width: popover.frame.width, below: popover, dismissAfter: 1.8)
+        animateIn(width: width, below: popover, dismissAfter: 1.8)
     }
 
 
@@ -2683,7 +2683,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         guard let pop = view.window else { return }
         let tw = toastWindow ?? ToastWindow()
         toastWindow = tw
-        tw.present(message: message, below: pop) { [weak self] in self?.onUndo?() }
+        tw.present(message: message, width: view.bounds.width, below: pop) { [weak self] in self?.onUndo?() }
     }
 
     /// "Copied /name" confirmation toast (no Undo) shown when you copy from the menu bar.
@@ -2691,7 +2691,8 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         guard let pop = view.window else { return }
         let tw = toastWindow ?? ToastWindow()
         toastWindow = tw
-        tw.presentMessage("Copied \(skill.initiator)", icon: "checkmark.circle.fill", below: pop)
+        tw.presentMessage("Copied \(skill.initiator)", icon: "checkmark.circle.fill",
+                          width: view.bounds.width, below: pop)
     }
 
     /// The toast lives with the menu — when the popover collapses, so does the toast.
