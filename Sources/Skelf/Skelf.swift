@@ -2131,18 +2131,26 @@ final class SkillDetailView: NSView {
             content = card
         }
 
+        // Liquid-Glass background; the painting is opaque at the top, the info below floats on glass.
+        let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: W, height: panelH))
+        glass.cornerRadius = 20
+        glass.autoresizingMask = [.width, .height]
+        glass.contentView = content
+        content.wantsLayer = true
+
+        // Borderless (no traffic-light close button); closes on Escape / click-away.
         let panel = PaintingPanel(contentRect: NSRect(x: 0, y: 0, width: W, height: panelH),
-                                  styleMask: [.titled, .closable, .fullSizeContentView],
-                                  backing: .buffered, defer: false)
-        panel.titlebarAppearsTransparent = true
-        panel.titleVisibility = .hidden
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
         panel.isMovableByWindowBackground = true
         panel.isReleasedWhenClosed = false
-        panel.hasShadow = true
-        panel.contentView = content
+        panel.contentView = glass
         panel.center()
         panel.level = .floating
         panel.makeKeyAndOrderFront(nil)
+        panel.animateOpen(scaling: glass.layer)
         paintingPanel = panel
     }
 
@@ -2153,8 +2161,7 @@ final class SkillDetailView: NSView {
         let d = ArtStore.shared.details(skill.id)
         let pad: CGFloat = 22, innerW = W - pad * 2
         let card = NSView()
-        card.wantsLayer = true
-        card.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        card.wantsLayer = true                          // clear bg so the panel's glass shows through
         card.translatesAutoresizingMaskIntoConstraints = false
         card.widthAnchor.constraint(equalToConstant: W).isActive = true
 
@@ -2236,9 +2243,6 @@ final class SkillDetailView: NSView {
         ])
         stack.setCustomSpacing(18, after: stack.arrangedSubviews.last!)
         stack.addArrangedSubview(whyBox)
-
-        stack.setCustomSpacing(12, after: whyBox)
-        stack.addArrangedSubview(lbl(d?.license ?? "Generated artwork", 11, .regular, .quaternaryLabelColor, width: innerW))
 
         card.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -3046,12 +3050,43 @@ final class ClickableRow: NSView {
     }
 }
 
-// The centered painting-details panel: takes key focus so it closes on Escape, and on
-// click-away (when it stops being the key window).
+// The centered, Liquid-Glass painting-details panel: takes key focus so it closes on
+// Escape and on click-away; fades + springs in on open and fades out on close.
 final class PaintingPanel: NSPanel {
+    private weak var scaleLayer: CALayer?
+    private var closing = false
     override var canBecomeKey: Bool { true }
+
+    func animateOpen(scaling layer: CALayer?) {
+        scaleLayer = layer
+        alphaValue = 0
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.22
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().alphaValue = 1
+        }
+        springPop(layer, from: 0.92, damping: 14, stiffness: 240)
+    }
+
     override func cancelOperation(_ sender: Any?) { close() }     // Escape
     override func resignKey() { super.resignKey(); close() }       // clicked outside
+
+    override func close() {
+        guard !closing else { return }
+        closing = true
+        if let l = scaleLayer {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.15; ctx.allowsImplicitAnimation = true
+                l.transform = centerScale(l, 0.96)
+            }
+        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.15
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            self.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in self?.finishClose() })
+    }
+    private func finishClose() { super.close() }
 }
 
 // A detached Liquid Glass toast that drops in below the popover with a bounce.
