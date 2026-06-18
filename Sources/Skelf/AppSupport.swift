@@ -226,13 +226,11 @@ final class AppSettings {
     }
 }
 
-// A Liquid Glass card whose corners are concentric with their container (macOS 27).
-final class GlassCardView: NSGlassEffectView {
-    @available(macOS 27.0, *)
-    override var cornerConfiguration: NSViewCornerConfiguration? {
-        .uniformCorners(radius: .containerConcentric(10))
-    }
-}
+// A Liquid Glass card. On macOS 27 this gains corners concentric with its container
+// (NSViewCornerConfiguration / .containerConcentric), but that refinement is deferred until the
+// macOS 27 SDK is the released toolchain — so for now it's a plain glass card and callers set
+// cornerRadius. Re-add the `cornerConfiguration` override here when building on Xcode 27+.
+final class GlassCardView: NSGlassEffectView {}
 
 // Verifies that a skill's actual GitHub page exists (HEAD the skill's /tree/HEAD/<path>
 // URL — which also proves the repo and owner exist). Only skills whose page is confirmed

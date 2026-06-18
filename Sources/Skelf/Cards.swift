@@ -227,7 +227,6 @@ final class GlassCircleButton: NSView {
         button.action = action
         button.translatesAutoresizingMaskIntoConstraints = false
         glass.cornerRadius = 15
-        if #available(macOS 27.0, *) { glass.effectIsInteractive = true }
         glass.contentView = button
         glass.translatesAutoresizingMaskIntoConstraints = false
         addSubview(glass)
