@@ -999,6 +999,41 @@ final class SkillArtView: NSView {
     }
     func setFavoritesArt() { imageLayer.contents = Self.favoritesImage() }
     func setThemedFallback(_ skill: Skill) { imageLayer.contents = Self.themedImage(skill) }
+    func setMosaic(_ cg: CGImage) { imageLayer.contents = cg }
+
+    // An album-cover-style 2×2 collage of a custom folder's skill art (over a gradient that
+    // shows through any empty quadrants).
+    static func mosaicImage(_ images: [CGImage], seed: String) -> CGImage {
+        let size = CGSize(width: 320, height: 420)
+        let img = NSImage(size: size)
+        img.lockFocus()
+        let cols = Palette.gradientColors(seed).compactMap { NSColor(cgColor: $0) }
+        if cols.count >= 2, let g = NSGradient(starting: cols[0], ending: cols[1]) {
+            g.draw(in: NSRect(origin: .zero, size: size), angle: 55)
+        }
+        let hw = size.width / 2, hh = size.height / 2
+        let quads = [NSRect(x: 0, y: hh, width: hw, height: hh), NSRect(x: hw, y: hh, width: hw, height: hh),
+                     NSRect(x: 0, y: 0, width: hw, height: hh), NSRect(x: hw, y: 0, width: hw, height: hh)]
+        // A single skill fills the whole tile; otherwise lay up to four into the quadrants.
+        if images.count == 1 {
+            drawAspectFill(images[0], in: NSRect(origin: .zero, size: size))
+        } else {
+            for (i, cg) in images.prefix(4).enumerated() { drawAspectFill(cg, in: quads[i]) }
+        }
+        img.unlockFocus()
+        var r = CGRect(origin: .zero, size: size)
+        return img.cgImage(forProposedRect: &r, context: nil, hints: nil) ?? .empty
+    }
+    private static func drawAspectFill(_ cg: CGImage, in rect: NSRect) {
+        NSGraphicsContext.current?.saveGraphicsState()
+        NSBezierPath(rect: rect).addClip()
+        let iw = CGFloat(cg.width), ih = CGFloat(cg.height)
+        let s = max(rect.width / iw, rect.height / ih)
+        let w = iw * s, h = ih * s
+        NSImage(cgImage: cg, size: NSSize(width: iw, height: ih))
+            .draw(in: NSRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h))
+        NSGraphicsContext.current?.restoreGraphicsState()
+    }
 
     // Generated per-skill fallback art: a gradient seeded by the skill's id (so it's
     // unique to that skill) overlaid with a faint purpose-matched icon.
@@ -1399,9 +1434,10 @@ final class FolderGridItem: NSCollectionViewItem {
         resetHover()
     }
 
-    func configure(_ node: FolderStore.Node, inMenuBar: Bool) {
+    func configure(_ node: FolderStore.Node, inMenuBar: Bool, mosaicSkills: [Skill] = []) {
         menuCircle.isHidden = false
-        // creator folders wear the creator's avatar; user folders get a gradient
+        // creator folders wear the creator's avatar; custom folders show a 2×2 mosaic of
+        // their skills' paintings (album-cover style); empty folders fall back to a gradient.
         if let creator = node.autoCreator {
             artKey = creator
             if let img = AvatarStore.shared.cached(creator) { art.setAvatar(img) }
@@ -1413,6 +1449,9 @@ final class FolderGridItem: NSCollectionViewItem {
                     self.art.setAvatar(img)
                 }
             }
+        } else if !mosaicSkills.isEmpty {
+            artKey = "mosaic:" + node.id
+            rebuildMosaic(node: node, skills: Array(mosaicSkills.prefix(4)))
         } else {
             artKey = "grad:" + node.name
             art.setGradient(node.name)
@@ -1425,6 +1464,26 @@ final class FolderGridItem: NSCollectionViewItem {
         countLabel.stringValue = parts.joined(separator: " · ")
         view.toolTip = node.name
         resetHover()
+    }
+
+    // Compose the folder's mosaic from its skills' art (cached painting, else themed art),
+    // then fetch any missing paintings and recompose when they land.
+    private func rebuildMosaic(node: FolderStore.Node, skills: [Skill]) {
+        let key = "mosaic:" + node.id
+        let imgs: [CGImage] = skills.map { s in
+            if let img = ArtStore.shared.cached(s.id) {
+                var r = CGRect(origin: .zero, size: img.size)
+                return img.cgImage(forProposedRect: &r, context: nil, hints: nil) ?? SkillArtView.themedImage(s)
+            }
+            return SkillArtView.themedImage(s)
+        }
+        art.setMosaic(SkillArtView.mosaicImage(imgs, seed: node.name))
+        for s in skills where ArtStore.shared.cached(s.id) == nil {
+            ArtStore.shared.fetch(s) { [weak self] _ in
+                guard let self = self, self.artKey == key else { return }
+                self.rebuildMosaic(node: node, skills: skills)
+            }
+        }
     }
 
     @objc private func menuClicked() { onMenu?(menuCircle) }
@@ -2447,7 +2506,11 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
         case .folder(let node):
             let item = cv.makeItem(withIdentifier: folderItemID, for: indexPath)
             if let folder = item as? FolderGridItem {
-                folder.configure(node, inMenuBar: model.folders.showsInMenuBar(node.id))
+                // custom folders get a mosaic of their (up to 4) skills' art
+                let mosaicSkills = node.autoCreator == nil
+                    ? node.skills.prefix(4).compactMap { id in model.store.skills.first { $0.id == id } }
+                    : []
+                folder.configure(node, inMenuBar: model.folders.showsInMenuBar(node.id), mosaicSkills: mosaicSkills)
                 folder.onMenu = { [weak self] anchor in
                     guard let self = self else { return }
                     self.popMenu(self.folderMenu(node), at: anchor)
