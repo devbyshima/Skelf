@@ -4,18 +4,21 @@ A tiny **native macOS menu-bar + window app** that lists your installed Claude C
 Browse a grid, open a skill's detail, and **Copy** its slash-command (e.g. `/humanizer`) to
 paste into cloud sessions.
 
-One Swift file: SwiftUI `NavigationStack` + Liquid Glass toolbars (bridged via
-`NSHostingController.sceneBridgingOptions`) hosting an AppKit grid + detail. Targets
-**macOS 26** (Liquid Glass). Compiles with `swiftc` plus Xcode's SwiftUI macro plugin.
+SwiftUI `NavigationStack` + Liquid Glass toolbars (bridged via
+`NSHostingController.sceneBridgingOptions`) hosting an AppKit grid + detail. One SwiftPM
+target, split into focused files under `Sources/Skelf/`. Targets **macOS 26** (Liquid Glass);
+needs **Xcode 26+** for the macOS 26 SDK and SwiftUI's macro plugin.
 
 ## Build & run
 
 ```bash
-./build.sh      # compiles Skelf.app (swiftc + Xcode's SwiftUI macro plugin)
-open Skelf.app  # launch
+open Package.swift              # open in Xcode and Run, or:
+swift build                     # SwiftPM build
+./build.sh && open Skelf.app    # bundled, ad-hoc-signed Skelf.app (icon + Info.plist)
 ```
 
-> Needs Xcode (or Xcode-beta) for the SwiftUI macro plugin; otherwise plain `swiftc`.
+> `build.sh` produces the real `.app` and locates Xcode's SwiftUI macro plugin for plain
+> `swiftc`; `swift build` / Xcode use it automatically.
 
 ## Features
 
@@ -69,10 +72,14 @@ open Skelf.app --args --popover                    # launch with the popover ope
 ## Layout
 
 ```
-Sources/Skelf/Skelf.swift   # the whole app, one file
-Resources/                  # skelf.svg · Skelf.icns · art-map.json · AppIcon/
+Package.swift               # SwiftPM target (opens in Xcode · swift build)
+Sources/Skelf/
+  ├── *.swift               # the app, split by concern (Skills, Art, Cards, Detail,
+  │                         #   Grid, Markdown, Navigation, MenuBar, App, …)
+  └── Resources/            # runtime: art-map.json · skelf.svg  (Bundle.module/Bundle.main)
+Resources/                  # app-packaging: Skelf.icns · AppIcon/
 build.sh                    # swiftc → Skelf.app (git-ignored build artifact)
 ```
 
-Ad-hoc signed (personal local use). Launch at Login registers reliably only for a signed app
-in `/Applications`.
+See `CONTRIBUTING.md` for the per-file breakdown. Ad-hoc signed (personal local use); Launch
+at Login registers reliably only for a signed app in `/Applications`.

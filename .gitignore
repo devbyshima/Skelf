@@ -4,6 +4,16 @@ Skelf.app/
 *.swiftdoc
 *.o
 
+# SwiftPM
+/.build/
+.swiftpm/
+
+# Xcode
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+
 # Intermediate icon build
 *.iconset/
 
