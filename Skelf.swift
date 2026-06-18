@@ -2508,11 +2508,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         if window == nil {
             let vc = SkillsViewController(store: store, favorites: favorites, folders: folders, onCopy: { [weak self] skill in self?.copy(skill) })
             viewController = vc
-            let w = NSWindow(contentViewController: vc)
+            // Create with an explicit frame, THEN attach the content VC, so the window
+            // keeps 760×580 instead of collapsing to the grid's (sizeless) fitting size.
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 580),
+                             styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                             backing: .buffered, defer: false)
+            w.contentViewController = vc
             w.title = "Skelf"
-            w.setContentSize(NSSize(width: 760, height: 580))
-            w.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             w.minSize = NSSize(width: 640, height: 440)
+            w.setContentSize(NSSize(width: 760, height: 580))
             w.center()
             w.isReleasedWhenClosed = false
             w.delegate = self            // for windowWillReturnUndoManager
