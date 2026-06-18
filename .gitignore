@@ -1,0 +1,12 @@
+# Build output
+Skelf.app/
+*.swiftmodule
+*.swiftdoc
+*.o
+
+# Intermediate icon build
+*.iconset/
+
+# macOS cruft
+.DS_Store
+**/.DS_Store
