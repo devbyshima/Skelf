@@ -2103,38 +2103,82 @@ final class SkillDetailView: NSView {
         bodyText.scroll(NSPoint(x: 0, y: 0))   // reset scroll to top for the new skill
     }
 
-    // Clicking the banner painting → a floating panel CENTERED on screen with the full
-    // painting + the artwork's details/history + WHY it was chosen for this skill.
+    // Clicking the banner painting → a floating Liquid-Glass panel CENTERED on screen. The
+    // layout ADAPTS to the artwork: a landscape painting sits full-bleed on top with the info
+    // below; a portrait painting sits on the LEFT (shown whole, never cropped) with the info
+    // on the RIGHT.
     private var paintingPanel: NSPanel?
     @objc private func bannerClicked() {
         guard let skill = skill else { return }
-        let W: CGFloat = 1080
-        let card = paintingCard(skill, width: W)
-        card.layoutSubtreeIfNeeded()
-        let h = ceil(card.fittingSize.height)
-        let maxH = (NSScreen.main?.visibleFrame.height ?? 900) - 120
-        let panelH = min(h, maxH)
+        let img = ArtStore.shared.cached(skill.id)
+        let aspect: CGFloat = (img.map { $0.size.width > 0 ? $0.size.height / $0.size.width : 1.31 }) ?? 420.0 / 320.0
+        let portrait = aspect > 1.12
+        let screenMaxH = (NSScreen.main?.visibleFrame.height ?? 900) - 100
+        let radius: CGFloat = 20
 
+        let art = SkillArtView(); art.showScrim = false
+        art.translatesAutoresizingMaskIntoConstraints = false
+        if let img = img { art.setAvatar(img) } else { art.setThemedFallback(skill) }
+
+        let infoColW: CGFloat = portrait ? 480 : 1080
+        let info = paintingInfo(skill, columnWidth: infoColW)
+        info.translatesAutoresizingMaskIntoConstraints = false
+        info.layoutSubtreeIfNeeded()
+        let infoH = ceil(info.fittingSize.height)
+
+        let card = NSView(); card.wantsLayer = true
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(art); card.addSubview(info)
+
+        var W: CGFloat, H: CGFloat
+        if portrait {
+            // image LEFT, fills the panel height at the painting's exact aspect (no crop); info RIGHT
+            H = max(infoH, 560)
+            let imageW = (H / aspect).rounded()
+            W = imageW + infoColW
+            NSLayoutConstraint.activate([
+                art.topAnchor.constraint(equalTo: card.topAnchor),
+                art.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+                art.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+                art.widthAnchor.constraint(equalToConstant: imageW),
+                info.topAnchor.constraint(equalTo: card.topAnchor),
+                info.leadingAnchor.constraint(equalTo: art.trailingAnchor),
+                info.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+                info.widthAnchor.constraint(equalToConstant: infoColW),
+                card.widthAnchor.constraint(equalToConstant: W),
+                card.heightAnchor.constraint(equalToConstant: H),
+            ])
+        } else {
+            // image TOP full-bleed, info BELOW
+            W = 1080
+            let imgH = min(W * aspect, 540)
+            H = imgH + infoH
+            NSLayoutConstraint.activate([
+                art.topAnchor.constraint(equalTo: card.topAnchor),
+                art.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+                art.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+                art.heightAnchor.constraint(equalToConstant: imgH),
+                info.topAnchor.constraint(equalTo: art.bottomAnchor),
+                info.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+                info.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+                card.widthAnchor.constraint(equalToConstant: W),
+                card.heightAnchor.constraint(equalToConstant: H),
+            ])
+        }
+
+        let panelH = min(H, screenMaxH)
         let content: NSView
-        if h > maxH {                              // taller than the screen → scroll inside
+        if H > screenMaxH {                            // taller than the screen → scroll the whole card
             let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: W, height: panelH))
             scroll.autoresizingMask = [.width, .height]
             scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
             scroll.drawsBackground = false; scroll.borderType = .noBorder
-            card.translatesAutoresizingMaskIntoConstraints = true
-            card.frame = NSRect(x: 0, y: 0, width: W, height: h); card.autoresizingMask = [.width]
             scroll.documentView = card
             content = scroll
         } else {
-            card.translatesAutoresizingMaskIntoConstraints = true
-            card.frame = NSRect(x: 0, y: 0, width: W, height: panelH); card.autoresizingMask = [.width, .height]
             content = card
         }
 
-        // Liquid-Glass background; the painting is opaque at the top, the info below floats on
-        // glass. Clip the content to the SAME radius as the glass so the full-bleed painting's
-        // corners follow the rounded panel instead of poking past the curve.
-        let radius: CGFloat = 20
         let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: W, height: panelH))
         glass.cornerRadius = radius
         glass.autoresizingMask = [.width, .height]
@@ -2159,30 +2203,13 @@ final class SkillDetailView: NSView {
         paintingPanel = panel
     }
 
-    // A big card whose painting is FULL-BLEED at the top (fills width, adapts height to the
-    // art); below it, a clean info block — title, artist, facts, the museum description, and
-    // a highlighted "why this painting" note.
-    private func paintingCard(_ skill: Skill, width W: CGFloat) -> NSView {
+    // The info column shown beside/under the painting: title, artist, facts, the museum
+    // description, and a highlighted "why this painting" callout. Padded; intrinsic height.
+    private func paintingInfo(_ skill: Skill, columnWidth colW: CGFloat) -> NSView {
         let d = ArtStore.shared.details(skill.id)
-        let pad: CGFloat = 22, innerW = W - pad * 2
-        let card = NSView()
-        card.wantsLayer = true                          // clear bg so the panel's glass shows through
-        card.translatesAutoresizingMaskIntoConstraints = false
-        card.widthAnchor.constraint(equalToConstant: W).isActive = true
-
-        // The painting, edge-to-edge at the top (aspect-fill, height adapts to the art).
-        let art = SkillArtView()
-        art.showScrim = false
-        art.translatesAutoresizingMaskIntoConstraints = false
-        let imgCap: CGFloat = min(540, W * 0.62)
-        var imgH: CGFloat = min(W * 420 / 320, imgCap)
-        if let img = ArtStore.shared.cached(skill.id) {
-            art.setAvatar(img)
-            if img.size.width > 0 { imgH = min(W * img.size.height / img.size.width, imgCap) }
-        } else {
-            art.setThemedFallback(skill)
-        }
-        card.addSubview(art)
+        let pad: CGFloat = 24, innerW = colW - pad * 2
+        let box = NSView()
+        box.translatesAutoresizingMaskIntoConstraints = false
 
         func lbl(_ s: String, _ size: CGFloat, _ w: NSFont.Weight, _ c: NSColor, lineSpacing: CGFloat = 0, width: CGFloat) -> NSTextField {
             let l = NSTextField(wrappingLabelWithString: s)
@@ -2206,7 +2233,6 @@ final class SkillDetailView: NSView {
         let stack = NSStackView()
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
-
         stack.addArrangedSubview(lbl(d?.title ?? "Generated cover art", 19, .bold, .labelColor, width: innerW))
         if let a = d?.artist, !a.isEmpty {
             stack.setCustomSpacing(3, after: stack.arrangedSubviews.last!)
@@ -2215,9 +2241,8 @@ final class SkillDetailView: NSView {
         let facts = [d?.date, d?.origin, d?.medium, d?.dimensions].compactMap { $0 }.filter { !$0.isEmpty }
         if !facts.isEmpty {
             stack.setCustomSpacing(8, after: stack.arrangedSubviews.last!)
-            stack.addArrangedSubview(lbl(facts.joined(separator: " · "), 11.5, .regular, .tertiaryLabelColor, lineSpacing: 2, width: innerW))
+            stack.addArrangedSubview(lbl(facts.joined(separator: " · "), 11.5, .regular, .secondaryLabelColor, lineSpacing: 2, width: innerW))
         }
-
         if let desc = d?.description, !desc.isEmpty {
             stack.setCustomSpacing(18, after: stack.arrangedSubviews.last!)
             let ah = sectionHeader("ABOUT THIS PAINTING"); stack.addArrangedSubview(ah)
@@ -2225,16 +2250,14 @@ final class SkillDetailView: NSView {
             stack.addArrangedSubview(lbl(desc, 13, .regular, NSColor.labelColor.withAlphaComponent(0.9), lineSpacing: 3, width: innerW))
         }
 
-        // The "why" sits in a tinted rounded callout so it reads as the key takeaway.
         let whyBox = NSView()
         whyBox.wantsLayer = true
         whyBox.layer?.cornerRadius = 10
         whyBox.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
         whyBox.translatesAutoresizingMaskIntoConstraints = false
-        let whyInner = innerW - 28
         let whyHdr = sectionHeader("WHY THIS PAINTING FOR THIS SKILL", .controlAccentColor)
         let whyText = (d?.why).flatMap { $0.isEmpty ? nil : $0 } ?? "This skill uses a generated cover (no museum painting matched)."
-        let whyLbl = lbl(whyText, 13.5, .medium, .labelColor, lineSpacing: 2, width: whyInner)
+        let whyLbl = lbl(whyText, 13.5, .medium, .labelColor, lineSpacing: 2, width: innerW - 28)
         let whyStack = NSStackView(views: [whyHdr, whyLbl])
         whyStack.orientation = .vertical; whyStack.alignment = .leading; whyStack.spacing = 6
         whyStack.translatesAutoresizingMaskIntoConstraints = false
@@ -2249,18 +2272,15 @@ final class SkillDetailView: NSView {
         stack.setCustomSpacing(18, after: stack.arrangedSubviews.last!)
         stack.addArrangedSubview(whyBox)
 
-        card.addSubview(stack)
+        box.addSubview(stack)
         NSLayoutConstraint.activate([
-            art.topAnchor.constraint(equalTo: card.topAnchor),
-            art.leadingAnchor.constraint(equalTo: card.leadingAnchor),
-            art.trailingAnchor.constraint(equalTo: card.trailingAnchor),
-            art.heightAnchor.constraint(equalToConstant: imgH),
-            stack.topAnchor.constraint(equalTo: art.bottomAnchor, constant: 18),
-            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: pad),
-            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -pad),
-            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -pad),
+            box.widthAnchor.constraint(equalToConstant: colW),
+            stack.topAnchor.constraint(equalTo: box.topAnchor, constant: pad),
+            stack.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: pad),
+            stack.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -pad),
+            stack.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -pad),
         ])
-        return card
+        return box
     }
 
     private func rebuildSidebar(_ skill: Skill, isFavorite: Bool, creator: String?, token: Int) {
