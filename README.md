@@ -64,11 +64,16 @@ swift build                     # SwiftPM build
   with a toast. Toggle from anywhere with **⌥⌘S**.
 - **Settings** (**⌘,** / popover ⋯ / ⚙ toolbar button) — Launch at Login, Menu Bar Only,
   Global Shortcut, Appearance (System/Light/Dark), Show Painting Covers, Refresh Painting
-  Art, Reduce Motion, Play Sounds. Opens centered; persists to `UserDefaults`.
+  Art, Reduce Motion, Play Sounds, Automatically Check for Updates. Opens centered; persists
+  to `UserDefaults`.
 - **Menus** — Skelf / File (New Folder ⌘N, Refresh Skills ⌘R) / Edit (Undo ⌘Z, Redo ⌘⇧Z) /
   Window / Help.
 - **Auto-detect** — an FSEvents watcher updates the app live as skills are added, removed,
   enabled, disabled, or edited.
+- **Self-updating** — checks GitHub for a newer release on launch and once a day, verifies the
+  download against the published `SHA256SUMS`, then installs it and relaunches (with a prompt).
+  Run it on demand from **Check for Updates…** (app menu or the popover ⋯); switch the automatic
+  check off in **Settings ▸ Updates**.
 
 ## Where it reads from
 
@@ -110,11 +115,13 @@ See `CONTRIBUTING.md` for the per-file breakdown.
 
 ## Privacy
 
-Skelf reads your skills from disk and contacts only three hosts, all over HTTPS: `api.artic.edu`
-and `www.artic.edu` (public-domain paintings) and `github.com` (creator avatars). It sends only a
-skill keyword plus standard request headers — no account, no analytics, no telemetry. Images cache
-under `~/Library/Caches/dev.fulltime.skelf/`; folders, favorites, and settings live in
-`UserDefaults`. Turn network art off entirely with **Settings → Show Painting Covers**.
+Skelf reads your skills from disk and reaches the network over HTTPS only for: public-domain
+paintings (`api.artic.edu`, `www.artic.edu`), creator avatars (`github.com`), and update checks —
+the GitHub Releases API (`api.github.com`) plus the release download host when you install an
+update. It sends only a skill keyword and standard request headers — no account, no analytics, no
+telemetry. Images cache under `~/Library/Caches/dev.fulltime.skelf/`; folders, favorites, and
+settings live in `UserDefaults`. Turn network art off with **Settings → Show Painting Covers**, and
+the update check with **Settings → Automatically Check for Updates**.
 
 ## Credits
 

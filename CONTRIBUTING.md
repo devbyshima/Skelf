@@ -41,6 +41,7 @@ The app is one SwiftPM target split into focused files under `Sources/Skelf/`:
 | `MenuBar.swift` | menu-bar popover, toast, painting panel, controls |
 | `HoverTip.swift` | shared Liquid Glass hover tip shown over skill cards |
 | `App.swift` | AppDelegate, status item, menus, `@main` entry |
+| `Updater.swift` | built-in auto-update (GitHub Releases check, SHA-256 verify, in-place install) |
 | `Bundle+Skelf.swift` | resource-bundle resolver (`Bundle.module` vs `Bundle.main`) |
 
 Runtime resources (`art-map.json`, `skelf.svg`) live in `Sources/Skelf/Resources/` and are
