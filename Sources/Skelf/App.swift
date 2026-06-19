@@ -260,16 +260,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     }
 
     /// The Skelf mark (from skelf.svg) as a menu-bar template image, falling back to an SF symbol.
+    ///
+    /// The SVG must be RASTERIZED into a concrete bitmap first. `NSImage(contentsOfFile:)` on an
+    /// SVG yields a vector-only representation (`_NSSVGImageRep`, 0×0 pixels) that draws fine in
+    /// an offscreen context but renders BLANK in the live status bar — which is why the menu-bar
+    /// icon never appeared in the release. Drawing it into bitmap reps (@1x + @2x) gives the
+    /// status button real pixels to composite as a template.
     private func menuBarIcon() -> NSImage {
-        if let p = skelfResourceBundle.path(forResource: "skelf", ofType: "svg"), let img = NSImage(contentsOfFile: p) {
-            img.isTemplate = true                              // tints to the menu-bar colour, adapts light/dark
-            img.size = NSSize(width: 24, height: 18)           // svg mark is ~1.38:1
-            return img
+        let size = NSSize(width: 22, height: 16)               // svg mark is ~1.38:1, sized for the bar
+        if let p = skelfResourceBundle.path(forResource: "skelf", ofType: "svg"),
+           let svg = NSImage(contentsOfFile: p),
+           let icon = rasterizedTemplate(svg, size: size) {
+            return icon
         }
         let fallback = NSImage(systemSymbolName: "square.stack.3d.up.fill", accessibilityDescription: "Skelf")
-            ?? NSImage(size: NSSize(width: 18, height: 18))
+            ?? NSImage(size: size)
         fallback.isTemplate = true
         return fallback
+    }
+
+    /// Draw `source` into bitmap reps at @1x and @2x and return a template image whose alpha the
+    /// menu bar tints to the bar colour. Returns nil if every pixel came out transparent, so the
+    /// caller can fall back to the SF symbol rather than show an invisible icon.
+    private func rasterizedTemplate(_ source: NSImage, size: NSSize) -> NSImage? {
+        let image = NSImage(size: size)
+        var anyOpaque = false
+        for scale in [1, 2] {
+            let pw = Int(size.width.rounded()) * scale, ph = Int(size.height.rounded()) * scale
+            guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pw, pixelsHigh: ph,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { continue }
+            rep.size = size
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            source.draw(in: NSRect(origin: .zero, size: size), from: .zero, operation: .sourceOver, fraction: 1)
+            NSGraphicsContext.restoreGraphicsState()
+            image.addRepresentation(rep)
+            if !anyOpaque {
+                let step = max(1, pw / 16)
+                for y in stride(from: 0, to: ph, by: step) where !anyOpaque {
+                    for x in stride(from: 0, to: pw, by: step) {
+                        if let c = rep.colorAt(x: x, y: y), c.alphaComponent > 0.01 { anyOpaque = true; break }
+                    }
+                }
+            }
+        }
+        guard anyOpaque else { return nil }
+        image.isTemplate = true                                // tints to the menu-bar colour, adapts light/dark
+        return image
     }
 
     @objc private func togglePopover(_ sender: Any?) {

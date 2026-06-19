@@ -6,6 +6,14 @@ All notable changes to Skelf are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-19
+
+### Fixed
+
+- Menu-bar icon never appeared in release builds. The Skelf mark was loaded straight from
+  `skelf.svg` into a vector-only `NSImage`, which the live menu bar composites as blank; it's
+  now rasterized to a bitmap template image (with an SF-symbol fallback) so the icon always shows.
+
 ## [1.0.0] - 2026-06-19
 
 ### Added
@@ -27,5 +35,6 @@ All notable changes to Skelf are documented here. The format is based on
 - Restructured from a single source file into focused files under `Sources/Skelf/`, added a
   SwiftPM `Package.swift` (opens in Xcode / `swift build`), CI, SwiftLint, and contributor docs.
 
-[Unreleased]: https://github.com/devbyshima/Skelf/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/devbyshima/Skelf/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/devbyshima/Skelf/releases/tag/v1.0.1
 [1.0.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.0.0
