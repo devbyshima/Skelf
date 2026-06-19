@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     var settingsWindow: NSWindow?
     var model: SkelfModel?
     var watcher: SkillWatcher?
+    var updateTimer: Timer?
     let popover = NSPopover()
     var popoverController: PopoverListController?
 
@@ -64,6 +65,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         AppSettings.shared.applyHotKey()
         showWindow()
         startWatching()
+        // Auto-update: a quick check shortly after launch, then periodically (each call
+        // self-throttles to ~once a day and honors the Settings toggle).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { Updater.checkInBackgroundIfDue() }
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in
+            Updater.checkInBackgroundIfDue()
+        }
         if let i = CommandLine.arguments.firstIndex(of: "--open"), i + 1 < CommandLine.arguments.count {
             model?.openSkill(CommandLine.arguments[i + 1])
         }
@@ -93,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         let appMenu = NSMenu()
         appItem.submenu = appMenu
         appMenu.addItem(withTitle: "About Skelf", action: #selector(showAbout), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())
@@ -153,6 +161,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         a.addButton(withTitle: "OK")
         a.runModal()
     }
+
+    @objc func checkForUpdates() { Updater.checkManually() }
 
     @objc func openSettings() {
         if settingsWindow == nil {

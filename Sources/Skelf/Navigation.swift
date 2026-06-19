@@ -97,6 +97,12 @@ struct SettingsView: View {
                 row("Reduce Motion", "Turn off the pop and spring animations.", $settings.reduceMotion)
                 row("Play Sounds", "A subtle sound on copy and other actions.", $settings.playSounds)
             }
+            Section("Updates") {
+                row("Automatically Check for Updates", "Look for a newer Skelf on launch and once a day.", $settings.autoCheckUpdates)
+                buttonRow("Check for Updates", "You’re on Skelf \(skelfShortVersion).", button: "Check Now", disabled: false) {
+                    NSApp.sendAction(#selector(AppDelegate.checkForUpdates), to: nil, from: nil)
+                }
+            }
         }
         .formStyle(.grouped)
         .frame(width: 500)

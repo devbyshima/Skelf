@@ -23,6 +23,11 @@ needs **Xcode 26+** for the macOS 26 SDK and SwiftUI's macro plugin.
    shortcut no longer works on macOS 15+.) Launch at Login works best once Skelf is in
    `/Applications`.
 
+After that first launch, Skelf keeps itself current: it checks GitHub for a newer release on
+launch and once a day, verifies the download against the published `SHA256SUMS`, and installs it
+with a prompt. Run it on demand from **Check for Updates…** (app menu or the popover's ⋯), or
+turn the automatic check off in **Settings ▸ Updates**.
+
 Prefer to build it yourself? See [Build & run](#build--run) below.
 
 ## Build & run

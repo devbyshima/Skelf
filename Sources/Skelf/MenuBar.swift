@@ -702,6 +702,8 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         settings.target = self; menu.addItem(settings)
         let sounds = NSMenuItem(title: "Play Sounds", action: #selector(toggleSounds), keyEquivalent: "")
         sounds.target = self; sounds.state = Sound.enabled ? .on : .off; menu.addItem(sounds)
+        let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkUpdatesTapped), keyEquivalent: "")
+        updates.target = self; menu.addItem(updates)
         menu.addItem(.separator())
         let about = NSMenuItem(title: "About Skelf", action: #selector(aboutTapped), keyEquivalent: "")
         about.target = self; menu.addItem(about)
@@ -714,6 +716,8 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     @objc private func settingsTapped() { onSettings?() }
 
     @objc private func toggleSounds() { Sound.setEnabled(!Sound.enabled); AppSettings.shared.playSounds = Sound.enabled }
+
+    @objc private func checkUpdatesTapped() { Updater.checkManually() }
 
     @objc private func aboutTapped() {
         let a = NSAlert()

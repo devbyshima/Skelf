@@ -161,6 +161,7 @@ final class AppSettings {
     private enum Keys {
         static let menuBarOnly = "menuBarOnly", reduceMotion = "reduceMotion", usePaintings = "usePaintings"
         static let appearance = "appearance", globalHotKey = "globalHotKeyEnabled"
+        static let autoCheckUpdates = "autoCheckUpdates"
     }
 
     private var applyingLogin = false
@@ -199,6 +200,10 @@ final class AppSettings {
     var globalHotKey: Bool {
         didSet { UserDefaults.standard.set(globalHotKey, forKey: Keys.globalHotKey); applyHotKey() }
     }
+    /// Check GitHub for a newer Skelf on launch and once a day (see Updater).
+    var autoCheckUpdates: Bool {
+        didSet { UserDefaults.standard.set(autoCheckUpdates, forKey: Keys.autoCheckUpdates) }
+    }
     static let artChanged = Notification.Name("SkelfArtSettingChanged")
 
     private init() {
@@ -209,6 +214,7 @@ final class AppSettings {
         usePaintings = (UserDefaults.standard.object(forKey: Keys.usePaintings) as? Bool) ?? true
         appearance = AppAppearance(rawValue: UserDefaults.standard.string(forKey: Keys.appearance) ?? "") ?? .system
         globalHotKey = (UserDefaults.standard.object(forKey: Keys.globalHotKey) as? Bool) ?? true
+        autoCheckUpdates = (UserDefaults.standard.object(forKey: Keys.autoCheckUpdates) as? Bool) ?? true
     }
 
     func applyMenuBarOnly() {
