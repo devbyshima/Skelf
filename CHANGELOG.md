@@ -6,6 +6,20 @@ All notable changes to Skelf are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-20
+
+### Changed
+
+- A look-and-feel revamp with Metal-shader and motion polish (all honoring Reduce Motion):
+  - The artwork popup is rebuilt in SwiftUI — a fixed-size, ratio-preserving card in a thin
+    Liquid-Glass frame with a Metal **ripple** shader that radiates on open and on click.
+  - Skill cards gain a parallax artwork **zoom on hover** and a crossfade + **shimmer** sweep
+    as each NASA image loads in.
+  - Folders, skills, and the detail view **cascade in** with a staggered ease-out entrance.
+  - Tactile **press feedback** on every button (card controls, Copy, detail sidebar), a green
+    copy-confirmation wash, and an expanding ring when a skill is favorited.
+  - A subtle legibility shadow on card and banner text over the space art.
+
 ## [1.2.0] - 2026-06-20
 
 ### Added
@@ -64,7 +78,8 @@ All notable changes to Skelf are documented here. The format is based on
 - Restructured from a single source file into focused files under `Sources/Skelf/`, added a
   SwiftPM `Package.swift` (opens in Xcode / `swift build`), CI, SwiftLint, and contributor docs.
 
-[Unreleased]: https://github.com/devbyshima/Skelf/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/devbyshima/Skelf/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.3.0
 [1.2.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.2.0
 [1.1.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.1.0
 [1.0.1]: https://github.com/devbyshima/Skelf/releases/tag/v1.0.1

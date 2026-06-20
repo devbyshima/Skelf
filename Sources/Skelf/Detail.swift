@@ -31,6 +31,9 @@ final class SkillDetailView: NSView {
     private let aiSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let bodyText = NSTextView()   // SKILL.md body — scrolls internally for big files
     private let sidebarStack = NSStackView()
+    private weak var leftColumn: NSView?   // left content column + sidebar — for the open cascade
+    private weak var sideColumn: NSView?
+    private var lastAnimatedId = ""
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -67,6 +70,7 @@ final class SkillDetailView: NSView {
         bannerName.font = .systemFont(ofSize: 28, weight: .bold)   // the page title — clearly largest
         bannerName.textColor = .white
         bannerName.lineBreakMode = .byTruncatingTail
+        bannerName.shadow = legibilityShadow()
         bannerName.translatesAutoresizingMaskIntoConstraints = false
         banner.addSubview(bannerName)
         bannerPillBox.wantsLayer = true
@@ -94,6 +98,7 @@ final class SkillDetailView: NSView {
         let leftBox = NSView()
         leftBox.translatesAutoresizingMaskIntoConstraints = false
         bodyRow.addSubview(leftBox)
+        leftColumn = leftBox
 
         // Summary block (the description), pinned at the top.
         let summaryHeader = NSTextField(labelWithString: "SUMMARY")
@@ -224,6 +229,7 @@ final class SkillDetailView: NSView {
         sidebarScroll.drawsBackground = false
         sidebarScroll.borderType = .noBorder
         bodyRow.addSubview(sidebarScroll)
+        sideColumn = sidebarScroll
         let sideClip = sidebarScroll.contentView
         let sideDoc = FlippedView()
         sideDoc.translatesAutoresizingMaskIntoConstraints = false
@@ -331,7 +337,7 @@ final class SkillDetailView: NSView {
     }
 
     private func sidebarButton(_ title: String, _ symbol: String, _ action: Selector, prominent: Bool = false) -> NSButton {
-        let b = NSButton(title: " " + title, target: self, action: action)
+        let b = AnimatedButton(title: " " + title, target: self, action: action)
         b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
         b.imagePosition = .imageLeading
         b.bezelStyle = .rounded
@@ -342,6 +348,8 @@ final class SkillDetailView: NSView {
     }
 
     func configure(_ skill: Skill, isFavorite: Bool) {
+        let isNewSkill = skill.id != lastAnimatedId
+        lastAnimatedId = skill.id
         self.skill = skill
         artToken += 1
         let token = artToken
@@ -401,6 +409,27 @@ final class SkillDetailView: NSView {
         }
 
         rebuildSidebar(skill, isFavorite: isFavorite, creator: creator, token: token)
+        if isNewSkill { animateContentIn() }
+    }
+
+    // A gentle staggered entrance when a skill opens: banner, then the left column, then the
+    // sidebar cascade up and fade in (ease-out, ≤ 340ms; matches the grid's open transition).
+    private func animateContentIn() {
+        guard !AppSettings.shared.reduceMotion else { return }
+        let cols: [(NSView?, TimeInterval)] = [(banner, 0), (leftColumn, 0.05), (sideColumn, 0.11)]
+        for (v, delay) in cols {
+            guard let l = v?.layer else { continue }
+            let start = CATransform3DMakeTranslation(0, -16, 0)
+            let tA = CABasicAnimation(keyPath: "transform"); tA.fromValue = start; tA.toValue = CATransform3DIdentity
+            let oA = CABasicAnimation(keyPath: "opacity"); oA.fromValue = 0; oA.toValue = 1
+            for a in [tA, oA] {
+                a.duration = 0.34
+                a.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                a.beginTime = CACurrentMediaTime() + delay
+                a.fillMode = .backwards
+            }
+            l.add(tA, forKey: "openInT"); l.add(oA, forKey: "openInO")
+        }
     }
 
     private static var mdCache: [String: NSAttributedString] = [:]
@@ -409,31 +438,31 @@ final class SkillDetailView: NSView {
         bodyText.scroll(NSPoint(x: 0, y: 0))   // reset scroll to top for the new skill
     }
 
-    // Clicking the banner → a floating Liquid-Glass panel centered on screen showing JUST the
-    // image, edge-to-edge at its own aspect ratio (no crop), scaled to fit the screen.
+    // Clicking the banner → a small, FIXED-footprint floating Liquid-Glass panel that frames the
+    // image at its own aspect ratio (SwiftUI `ArtworkPopupView`, with a Metal ripple shader).
     private var paintingPanel: NSPanel?
     @objc private func bannerClicked() {
         guard let skill = skill else { return }
-        let img = ArtStore.shared.cached(skill.id)
-        let aspect: CGFloat = (img.map { $0.size.width > 0 ? $0.size.height / $0.size.width : 0.66 }) ?? 0.66
+        let img = ArtStore.shared.cached(skill.id) ?? Self.fallbackImage(skill)
+        // Fixed footprint: the image's LONGEST side is `maxSide`, ratio preserved (capped to screen).
+        let aspect = img.size.width > 0 ? img.size.height / img.size.width : 0.66
         let vf = (self.window?.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        var w = min(1000, vf.width - 120), h = (w * aspect).rounded()
-        let maxH = vf.height - 120
-        if h > maxH { h = maxH; w = (h / aspect).rounded() }
-        let radius: CGFloat = 20
+        let maxSide: CGFloat = min(1020, min(vf.width, vf.height) - 120)
+        let iw = (aspect > 1 ? maxSide / aspect : maxSide).rounded()
+        let ih = (aspect > 1 ? maxSide : maxSide * aspect).rounded()
+        let pad: CGFloat = 8, radius: CGFloat = 20
+        let w = iw + pad * 2, h = ih + pad * 2
 
-        let art = SkillArtView(frame: NSRect(x: 0, y: 0, width: w, height: h))
-        art.showScrim = false
-        art.autoresizingMask = [.width, .height]
-        art.wantsLayer = true
-        art.layer?.cornerRadius = radius
-        art.layer?.masksToBounds = true
-        if let img = img { art.setAvatar(img) } else { art.setThemedFallback(skill) }
+        let host = NSHostingView(rootView: ArtworkPopupView(image: img, imageSize: CGSize(width: iw, height: ih)))
+        host.frame = NSRect(x: 0, y: 0, width: w, height: h)
+        host.autoresizingMask = [.width, .height]
+        host.layer?.backgroundColor = .clear
 
+        // The Liquid-Glass frame shows through the SwiftUI view's padding.
         let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: w, height: h))
         glass.cornerRadius = radius
         glass.autoresizingMask = [.width, .height]
-        glass.contentView = art
+        glass.contentView = host
 
         // Borderless (no traffic-light close button); closes on Escape / click-away.
         let panel = PaintingPanel(contentRect: NSRect(x: 0, y: 0, width: w, height: h),
@@ -449,6 +478,18 @@ final class SkillDetailView: NSView {
         panel.makeKeyAndOrderFront(nil)
         panel.animateOpen(scaling: glass.layer)
         paintingPanel = panel
+    }
+
+    // A themed gradient stand-in when a skill's space image hasn't been cached yet.
+    private static func fallbackImage(_ skill: Skill) -> NSImage {
+        let size = NSSize(width: 480, height: 360)
+        let img = NSImage(size: size)
+        img.lockFocus()
+        let cols = Palette.gradientColors(skill.id).compactMap { NSColor(cgColor: $0) }
+        (NSGradient(colors: cols.count >= 2 ? cols : [.darkGray, .black]))?
+            .draw(in: NSRect(origin: .zero, size: size), angle: -60)
+        img.unlockFocus()
+        return img
     }
 
     private func rebuildSidebar(_ skill: Skill, isFavorite: Bool, creator: String?, token: Int) {

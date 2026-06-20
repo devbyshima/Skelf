@@ -12,8 +12,8 @@ ARCH="$(uname -m)"   # arm64 on Apple Silicon
 # (marketing) version, SemVer; SKELF_BUILD is a monotonic build number, bumped each release
 # build. Both are written into Info.plist below and read back at runtime by Bundle+Skelf.swift
 # (skelfShortVersion / skelfBuildVersion) and surfaced via `Skelf --version`.
-SKELF_VERSION="1.2.0"
-SKELF_BUILD="4"
+SKELF_VERSION="1.3.0"
+SKELF_BUILD="5"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -76,6 +76,20 @@ swiftc -O -swift-version 5 -parse-as-library \
   "${PLUGIN_ARGS[@]}" \
   "$SRCDIR"/*.swift \
   -o "$APP/Contents/MacOS/Skelf"
+
+# Compile the SwiftUI Metal shaders (Shaders.metal) into the app's default.metallib so
+# SwiftUI's ShaderLibrary can load them at runtime (the ripple effect on the artwork popup).
+# swiftc above only compiles *.swift; the .metal file needs the Metal toolchain.
+METAL_SRC="$SRCDIR/Shaders.metal"
+if [ -f "$METAL_SRC" ]; then
+  if xcrun -sdk macosx metal -o "$DIR/Skelf.air" -c "$METAL_SRC" 2>/dev/null \
+     && xcrun -sdk macosx metallib "$DIR/Skelf.air" -o "$APP/Contents/Resources/default.metallib" 2>/dev/null; then
+    echo "Built default.metallib (Metal shaders)"
+  else
+    echo "WARNING: Metal shader compile failed; the ripple effect will be inert." >&2
+  fi
+  rm -f "$DIR/Skelf.air"
+fi
 
 # Ad-hoc sign so the locally-built app launches cleanly. Skelf is a single binary, so --deep
 # is unnecessary (and Apple deprecates it for signing). Released builds are also ad-hoc/unsigned;

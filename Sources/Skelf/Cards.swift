@@ -8,6 +8,15 @@ import CoreServices
 import ServiceManagement
 import Carbon.HIToolbox
 
+// A soft drop shadow that keeps white card/banner text legible over bright or busy artwork.
+func legibilityShadow() -> NSShadow {
+    let s = NSShadow()
+    s.shadowColor = NSColor.black.withAlphaComponent(0.6)
+    s.shadowBlurRadius = 4
+    s.shadowOffset = NSSize(width: 0, height: -1)
+    return s
+}
+
 final class SkillArtView: NSView {
     private let imageLayer = CALayer()
     private let scrim = CAGradientLayer()
@@ -38,10 +47,50 @@ final class SkillArtView: NSView {
     func setGradient(_ name: String, monogram: Bool = true) {
         imageLayer.contents = Self.gradientImage(name, monogram: monogram)
     }
-    func setAvatar(_ image: NSImage) {
+    func setAvatar(_ image: NSImage, animated: Bool = false) {
         var r = CGRect(origin: .zero, size: image.size)
-        imageLayer.contents = image.cgImage(forProposedRect: &r, context: nil, hints: nil)
+        let cg = image.cgImage(forProposedRect: &r, context: nil, hints: nil)
+        if animated {
+            let fade = CATransition(); fade.type = .fade; fade.duration = 0.45
+            imageLayer.add(fade, forKey: "contents")
+            imageLayer.contents = cg
+            shimmerOnce()                       // a light sweep as the real art lands
+        } else {
+            imageLayer.contents = cg
+        }
     }
+
+    /// A one-shot diagonal highlight sweep across the card (when its art finishes loading).
+    func shimmerOnce() {
+        guard bounds.width > 1, !AppSettings.shared.reduceMotion else { return }
+        let band = CAGradientLayer()
+        let w = bounds.width * 0.55
+        band.frame = CGRect(x: 0, y: -bounds.height * 0.25, width: w, height: bounds.height * 1.5)
+        band.startPoint = CGPoint(x: 0, y: 0.5); band.endPoint = CGPoint(x: 1, y: 0.5)
+        band.colors = [NSColor.clear.cgColor, NSColor.white.withAlphaComponent(0.28).cgColor, NSColor.clear.cgColor]
+        band.locations = [0, 0.5, 1]
+        band.transform = CATransform3DMakeRotation(.pi / 7, 0, 0, 1)
+        band.compositingFilter = "screenBlendMode"
+        layer?.insertSublayer(band, below: scrim)        // over the art, under the legibility scrim
+        let sweep = CABasicAnimation(keyPath: "position.x")
+        sweep.fromValue = -w; sweep.toValue = bounds.width + w
+        sweep.duration = 0.85
+        sweep.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        band.add(sweep, forKey: "shimmer")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { band.removeFromSuperlayer() }
+    }
+
+    /// Gently zoom only the artwork (not the scrim/labels) — a parallax lift on card hover.
+    func setHoverZoom(_ on: Bool) {
+        guard !AppSettings.shared.reduceMotion else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.4
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            ctx.allowsImplicitAnimation = true
+            imageLayer.transform = on ? CATransform3DMakeScale(1.1, 1.1, 1) : CATransform3DIdentity
+        }
+    }
+    func resetZoom() { imageLayer.transform = CATransform3DIdentity }
     func setFavoritesArt() { imageLayer.contents = Self.favoritesImage() }
     func setThemedFallback(_ skill: Skill) { imageLayer.contents = Self.themedImage(skill) }
     func setMosaic(_ cg: CGImage) { imageLayer.contents = cg }
@@ -204,13 +253,33 @@ final class CardRootView: NSView {
     }
 }
 
+// An NSButton with tactile press feedback: a quick scale-down while held, easing back on
+// release (Disney active-state / squash; ~140ms ease-out, honors Reduce Motion). Used wherever
+// a button should feel pressable — card controls, the Copy button, the detail sidebar.
+final class AnimatedButton: NSButton {
+    override init(frame frameRect: NSRect) { super.init(frame: frameRect); wantsLayer = true }
+    required init?(coder: NSCoder) { fatalError() }
+    override var isHighlighted: Bool {
+        didSet {
+            guard isHighlighted != oldValue, let l = layer, l.bounds.width > 1,
+                  !AppSettings.shared.reduceMotion else { return }
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.14
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                ctx.allowsImplicitAnimation = true
+                l.transform = isHighlighted ? centerScale(l, 0.92) : CATransform3DIdentity
+            }
+        }
+    }
+}
+
 // A Liquid-Glass circular control overlaid on a card (favorite / ⋯).
 // A real Liquid-Glass circular control overlaid on a card (favorite / ⋯). To keep a
 // gridful of them performant, the card groups its glass controls inside an
 // NSGlassEffectContainerView (see makeGlassControls) so they share ONE backdrop
 // sampling pass instead of one each.
 final class GlassCircleButton: NSView {
-    let button = NSButton()
+    let button = AnimatedButton()
     let glass = NSGlassEffectView()
     init(symbol: String, target: AnyObject, action: Selector) {
         super.init(frame: .zero)
@@ -264,7 +333,7 @@ final class SkillGridItem: NSCollectionViewItem {
     private var menuCircle: GlassCircleButton!
     private let nameLabel = NSTextField(labelWithString: "")
     private let descLabel = NSTextField(wrappingLabelWithString: "")
-    private let copyButton = NSButton()
+    private let copyButton = AnimatedButton()
     private var hovering = false
     private var artKey = ""
     private(set) var skillId = ""
@@ -295,11 +364,13 @@ final class SkillGridItem: NSCollectionViewItem {
         nameLabel.font = .systemFont(ofSize: 17, weight: .bold)
         nameLabel.textColor = .white
         nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.shadow = legibilityShadow()
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(nameLabel)
 
         descLabel.font = .systemFont(ofSize: 12)
-        descLabel.textColor = NSColor.white.withAlphaComponent(0.82)
+        descLabel.textColor = NSColor.white.withAlphaComponent(0.88)
+        descLabel.shadow = legibilityShadow()
         descLabel.maximumNumberOfLines = 2
         descLabel.lineBreakMode = .byWordWrapping       // wrap to 2 lines…
         descLabel.cell?.truncatesLastVisibleLine = true // …then ellipsize the 2nd
@@ -364,7 +435,7 @@ final class SkillGridItem: NSCollectionViewItem {
             let key = skill.id
             ArtStore.shared.fetch(skill) { [weak self] img in
                 guard let self = self, self.artKey == key, let img = img else { return }
-                self.art.setAvatar(img)   // upgrade the fallback to the real CC art
+                self.art.setAvatar(img, animated: true)   // crossfade + shimmer in the real art
             }
         }
         nameLabel.stringValue = skill.name
@@ -384,7 +455,10 @@ final class SkillGridItem: NSCollectionViewItem {
         favCircle.button.image = NSImage(systemSymbolName: on ? "star.fill" : "star",
                                          accessibilityDescription: on ? "Favorited" : "Favorite")
         favCircle.button.contentTintColor = on ? .systemYellow : .white
-        if animated { springPop(favCircle.layer, from: on ? 0.5 : 0.86, damping: 9, stiffness: 380) }
+        if animated {
+            springPop(favCircle.layer, from: on ? 0.5 : 0.86, damping: 9, stiffness: 380)
+            if on { favoriteBurst() }
+        }
     }
 
     @objc private func favClicked() {
@@ -396,7 +470,36 @@ final class SkillGridItem: NSCollectionViewItem {
         onCopy?()
         springPop(copyButton.layer, from: 0.9)
         setCopyTitle("Copied ✓")
+        // A brief green wash confirms the copy, then settles back to white.
+        if !AppSettings.shared.reduceMotion, let l = copyButton.layer {
+            let flash = CABasicAnimation(keyPath: "backgroundColor")
+            flash.fromValue = NSColor(calibratedRed: 0.52, green: 0.86, blue: 0.56, alpha: 1).cgColor
+            flash.toValue = NSColor.white.cgColor
+            flash.duration = 0.7
+            flash.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            l.add(flash, forKey: "copyFlash")
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak self] in self?.setCopyTitle("Copy") }
+    }
+
+    // A quick expanding ring when a skill is favorited (secondary action / follow-through).
+    private func favoriteBurst() {
+        guard !AppSettings.shared.reduceMotion, let host = favCircle.layer else { return }
+        let ring = CAShapeLayer()
+        ring.frame = favCircle.bounds
+        let r: CGFloat = 11
+        ring.path = CGPath(ellipseIn: CGRect(x: favCircle.bounds.midX - r, y: favCircle.bounds.midY - r,
+                                             width: r * 2, height: r * 2), transform: nil)
+        ring.fillColor = NSColor.clear.cgColor
+        ring.strokeColor = NSColor.systemYellow.cgColor
+        ring.lineWidth = 2
+        host.addSublayer(ring)
+        let scale = CABasicAnimation(keyPath: "transform.scale"); scale.fromValue = 0.4; scale.toValue = 1.9
+        let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0.9; fade.toValue = 0
+        let g = CAAnimationGroup(); g.animations = [scale, fade]; g.duration = 0.5
+        g.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        ring.add(g, forKey: "burst")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { ring.removeFromSuperlayer() }
     }
 
     func pressPop() { SkillHoverTip.shared.cancel(); springPop(view.layer, from: 0.97) }
@@ -406,6 +509,7 @@ final class SkillGridItem: NSCollectionViewItem {
         view.layer?.transform = CATransform3DIdentity
         view.layer?.shadowOpacity = 0
         view.layer?.zPosition = 0
+        art.resetZoom()
     }
     override func mouseEntered(with event: NSEvent) {
         hovering = true; applyHover()
@@ -420,9 +524,10 @@ final class SkillGridItem: NSCollectionViewItem {
             ctx.duration = 0.2
             ctx.timingFunction = CAMediaTimingFunction(name: hovering ? .easeOut : .easeInEaseOut)
             ctx.allowsImplicitAnimation = true
-            l.transform = hovering ? centerScale(l, 1.04) : CATransform3DIdentity
-            l.shadowOpacity = hovering ? 0.42 : 0.0
+            l.transform = hovering ? centerScale(l, 1.05) : CATransform3DIdentity
+            l.shadowOpacity = hovering ? 0.5 : 0.0
         }
+        art.setHoverZoom(hovering)
     }
     override var isSelected: Bool {
         didSet {
@@ -456,12 +561,14 @@ final class FolderGridItem: NSCollectionViewItem {
         nameLabel.font = .systemFont(ofSize: 17, weight: .bold)
         nameLabel.textColor = .white
         nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.shadow = legibilityShadow()
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(nameLabel)
 
         countLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        countLabel.textColor = NSColor.white.withAlphaComponent(0.8)
+        countLabel.textColor = NSColor.white.withAlphaComponent(0.86)
         countLabel.lineBreakMode = .byTruncatingTail
+        countLabel.shadow = legibilityShadow()
         countLabel.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(countLabel)
 
@@ -554,6 +661,7 @@ final class FolderGridItem: NSCollectionViewItem {
         view.layer?.transform = CATransform3DIdentity
         view.layer?.shadowOpacity = 0
         view.layer?.zPosition = 0
+        art.resetZoom()
     }
     override func mouseEntered(with event: NSEvent) { hovering = true; applyHover() }
     override func mouseExited(with event: NSEvent) { hovering = false; applyHover() }
@@ -564,9 +672,10 @@ final class FolderGridItem: NSCollectionViewItem {
             ctx.duration = 0.2
             ctx.timingFunction = CAMediaTimingFunction(name: hovering ? .easeOut : .easeInEaseOut)
             ctx.allowsImplicitAnimation = true
-            l.transform = hovering ? centerScale(l, 1.04) : CATransform3DIdentity
-            l.shadowOpacity = hovering ? 0.42 : 0.0
+            l.transform = hovering ? centerScale(l, 1.05) : CATransform3DIdentity
+            l.shadowOpacity = hovering ? 0.5 : 0.0
         }
+        art.setHoverZoom(hovering)
     }
     override var isSelected: Bool {
         didSet {

@@ -205,7 +205,33 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
         view = root
     }
 
-    override func viewDidLoad() { super.viewDidLoad(); reload() }
+    // Cards that display within this window after a folder/skill opens get a staggered
+    // ease-out entrance (set fresh per pushed GridViewController, so it fires on open, not on
+    // every search/reload of an existing screen).
+    private var entranceDeadline = Date.distantPast
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        entranceDeadline = Date().addingTimeInterval(0.5)
+        reload()
+    }
+
+    func collectionView(_ cv: NSCollectionView, willDisplay item: NSCollectionViewItem,
+                        forRepresentedObjectAt indexPath: IndexPath) {
+        guard Date() < entranceDeadline, !AppSettings.shared.reduceMotion,
+              let l = item.view.layer, l.bounds.width > 1 else { return }
+        let delay = min(Double(indexPath.item), 11) * 0.028           // ≤ 50ms/item; capped total
+        let start = CATransform3DTranslate(centerScale(l, 0.95), 0, 14, 0)
+        let tA = CABasicAnimation(keyPath: "transform"); tA.fromValue = start; tA.toValue = CATransform3DIdentity
+        let oA = CABasicAnimation(keyPath: "opacity"); oA.fromValue = 0; oA.toValue = 1
+        for a in [tA, oA] {
+            a.duration = 0.36
+            a.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            a.beginTime = CACurrentMediaTime() + delay
+            a.fillMode = .backwards                                    // hold hidden until the stagger delay
+        }
+        l.transform = CATransform3DIdentity; l.opacity = 1            // resting state (safe if interrupted)
+        l.add(tA, forKey: "entranceT"); l.add(oA, forKey: "entranceO")
+    }
 
     // Cards are portrait and the column count flows with the window width. CardFlowLayout
     // computes item frames from the live clip width, so re-invalidate when that changes
