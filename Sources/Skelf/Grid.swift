@@ -155,6 +155,13 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
     private var query = ""
     private var lastToken = -1
 
+    // On-device AI search state (Foundation Models). `aiRanked` caches the model's ranking
+    // for the current query so buildEntries can render it without re-invoking the model;
+    // `rankTask` is the in-flight request, cancelled when the query changes.
+    private var aiRanked: (query: String, ids: [String])?
+    private var pendingRankQuery: String?
+    private var rankTask: Task<Void, Never>?
+
     private let collectionView = GridCollectionView()
     private let gridScroll = NSScrollView()
     private let skillItemID = NSUserInterfaceItemIdentifier("SkillGridItem")
@@ -224,6 +231,11 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
         // needs a light in-place star refresh inside ordinary folders.
         let favNeedsRebuild = favChanged && (folderId == favoritesFolderId || folderId == model.folders.rootId)
         let rebuild = query != self.query || token != lastToken || favNeedsRebuild
+        if query != self.query {        // a new search invalidates any in-flight / cached AI ranking
+            aiRanked = nil; pendingRankQuery = nil
+            rankTask?.cancel(); rankTask = nil
+            if SkillFinder.shared.isAvailable && !query.isEmpty { SkillFinder.shared.prewarm() }
+        }
         self.query = query; lastToken = token; lastFavToken = favToken
         guard isViewLoaded else { return }
         if rebuild { reload() } else if favChanged { refreshFavorites() }
@@ -256,7 +268,24 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
         // wins over the per-folder / Favorites scoping below.
         if !q.isEmpty {
             let foundFolders = model.folders.allFolders().filter { $0.name.lowercased().contains(q) }
-            let matched = model.store.skills.filter { skillMatches($0, q) }
+            var matched = model.store.skills.filter { skillMatches($0, q) }
+
+            // On-device AI fallback: when a literal substring search finds little but the
+            // query reads like a task ("my emails go to spam"), let Foundation Models rank
+            // the skills that actually fit. Purely additive — when the model is unavailable
+            // or hasn't answered yet, the substring results below are shown unchanged.
+            let rawQuery = query.trimmingCharacters(in: .whitespaces)
+            if SkillFinder.shared.isAvailable, Self.looksLikeNaturalLanguage(rawQuery), matched.count <= 2 {
+                if let ranked = aiRanked, ranked.query == q {
+                    let byId = Dictionary(model.store.skills.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+                    let aiSkills = ranked.ids.compactMap { byId[$0] }
+                    let aiIds = Set(ranked.ids)
+                    matched = aiSkills + matched.filter { !aiIds.contains($0.id) }   // AI order first
+                } else {
+                    startAIRank(for: q, rawQuery: rawQuery)   // kick off; show substring results meanwhile
+                }
+            }
+
             let on = matched.filter { $0.enabled }, off = matched.filter { !$0.enabled }
             var s: [(title: String, items: [GridEntry])] = []
             if !foundFolders.isEmpty { s.append(("Folders", foundFolders.map { .folder($0) })) }
@@ -292,6 +321,31 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
         if !skills.isEmpty { s.append(("Skills", skills.map { .skill($0) })) }
         if !off.isEmpty { s.append(("Off Skills", off.map { .skill($0) })) }
         sections = s
+    }
+
+    // A query is "natural language" (worth an AI pass) once it's more than one word — a
+    // bare token like "auth" stays a fast literal lookup.
+    private static func looksLikeNaturalLanguage(_ s: String) -> Bool {
+        s.split(whereSeparator: { $0 == " " }).filter { !$0.isEmpty }.count >= 2
+    }
+
+    /// Ask the on-device model to rank skills for `q`; on success, cache the ranking and
+    /// reload so buildEntries renders it. One request in flight at a time; a query change
+    /// cancels it (see apply). Any failure leaves the substring results untouched.
+    private func startAIRank(for q: String, rawQuery: String) {
+        guard pendingRankQuery != q else { return }
+        pendingRankQuery = q
+        rankTask?.cancel()
+        let candidates = model.store.skills
+        rankTask = Task { @MainActor [weak self] in
+            let ids = await SkillFinder.shared.rank(query: rawQuery, candidates: candidates)
+            guard let self = self, !Task.isCancelled else { return }
+            self.pendingRankQuery = nil
+            // Only apply if the user is still on this exact query.
+            guard let ids = ids, self.query.trimmingCharacters(in: .whitespaces).lowercased() == q else { return }
+            self.aiRanked = (q, ids)
+            self.reload()
+        }
     }
 
     private func entry(at ip: IndexPath) -> GridEntry? {
