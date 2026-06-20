@@ -447,10 +447,10 @@ final class SkillDetailView: NSView {
         // Fixed footprint: the image's LONGEST side is `maxSide`, ratio preserved (capped to screen).
         let aspect = img.size.width > 0 ? img.size.height / img.size.width : 0.66
         let vf = (self.window?.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let maxSide: CGFloat = min(1020, min(vf.width, vf.height) - 120)
+        let maxSide: CGFloat = min(680, min(vf.width, vf.height) - 120)
         let iw = (aspect > 1 ? maxSide / aspect : maxSide).rounded()
         let ih = (aspect > 1 ? maxSide : maxSide * aspect).rounded()
-        let pad: CGFloat = 8, radius: CGFloat = 20
+        let pad: CGFloat = 5, radius: CGFloat = 16
         let w = iw + pad * 2, h = ih + pad * 2
 
         let host = NSHostingView(rootView: ArtworkPopupView(image: img, imageSize: CGSize(width: iw, height: ih)))

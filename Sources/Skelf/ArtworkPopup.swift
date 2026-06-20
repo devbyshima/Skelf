@@ -1,79 +1,67 @@
-// The artwork popup, redesigned in SwiftUI: a small, fixed-footprint card that shows a skill's
-// image at its own aspect ratio inside a Liquid-Glass frame, with a Metal ripple shader that
-// radiates on appear and on click. Hosted in a floating glass panel by Detail.swift.
+// The artwork popup, in SwiftUI: a small, fixed-footprint card that shows a skill's image at
+// its own aspect ratio inside a thin Liquid-Glass frame, with a Metal ripple shader that
+// radiates on appear and on EVERY click. Hosted in a floating glass panel by Detail.swift.
+//
+// The ripple is driven by an explicit start `Date` + a TimelineView, NOT keyframeAnimator:
+// every tap just stamps a new start time and origin, so it restarts reliably under rapid
+// stress-clicking. The shader is applied ONLY while a ripple is in flight — when idle the raw
+// image always shows (and the timeline is paused), so a failed shader load can never blank it.
 
 import SwiftUI
 import AppKit
 
-// MARK: - Ripple (Metal `skelfRipple` shader, driven by a keyframe-animated clock)
-
-private struct RippleModifier: ViewModifier {
-    var origin: CGPoint
-    var time: TimeInterval
-    var amplitude: Double = 10
-    var frequency: Double = 14
-    var decay: Double = 7
-    var speed: Double = 900
-
-    func body(content: Content) -> some View {
-        let shader = ShaderLibrary.skelfRipple(
-            .float2(origin), .float(time),
-            .float(amplitude), .float(frequency), .float(decay), .float(speed)
-        )
-        content.layerEffect(shader, maxSampleOffset: CGSize(width: amplitude, height: amplitude),
-                            isEnabled: time > 0)
-    }
-}
-
-// Re-runs the ripple (time animates 0 → duration) every time `trigger` flips.
-private struct RippleEffect: ViewModifier {
-    var origin: CGPoint
-    var trigger: Bool
-    var duration: TimeInterval = 1.3
-
-    func body(content: Content) -> some View {
-        content.keyframeAnimator(initialValue: 0.0, trigger: trigger) { view, time in
-            view.modifier(RippleModifier(origin: origin, time: time))
-        } keyframes: { _ in
-            LinearKeyframe(duration, duration: duration)
-        }
-    }
-}
-
-// MARK: - Popup
-
 struct ArtworkPopupView: View {
     let image: NSImage
-    let imageSize: CGSize          // the on-screen image size (fixed, ratio-preserving)
+    let imageSize: CGSize
 
     @State private var origin: CGPoint = .zero
-    @State private var trigger = false
+    @State private var rippleStart: Date?      // non-nil only while a ripple is animating
     @State private var shown = false
+    private let rippleDuration: TimeInterval = 1.2
 
     var body: some View {
-        Image(nsImage: image)
-            .resizable()
-            .interpolation(.high)
-            .scaledToFit()
-            .frame(width: imageSize.width, height: imageSize.height)
-            .clipShape(.rect(cornerRadius: 14, style: .continuous))
-            .modifier(RippleEffect(origin: origin, trigger: trigger))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(.white.opacity(0.16), lineWidth: 1)
-            )
-            .contentShape(.rect(cornerRadius: 14))
-            .onTapGesture { location in
-                origin = location
-                trigger.toggle()
+        // Paused (no redraws, raw image) until a ripple is in flight.
+        TimelineView(.animation(paused: rippleStart == nil)) { timeline in
+            let elapsed = rippleStart.map { timeline.date.timeIntervalSince($0) } ?? rippleDuration
+            let active = elapsed >= 0 && elapsed < rippleDuration
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: imageSize.width, height: imageSize.height)
+                .clipShape(.rect(cornerRadius: 12, style: .continuous))
+                .layerEffect(
+                    ShaderLibrary.skelfRipple(.float2(origin), .float(elapsed),
+                                              .float(10), .float(14), .float(7), .float(900)),
+                    maxSampleOffset: CGSize(width: 10, height: 10),
+                    isEnabled: active
+                )
+        }
+        .frame(width: imageSize.width, height: imageSize.height)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+        )
+        .contentShape(.rect(cornerRadius: 12))
+        .onTapGesture { location in startRipple(at: location) }
+        .scaleEffect(shown ? 1 : 0.9)
+        .opacity(shown ? 1 : 0)
+        .padding(5)                            // a thin Liquid-Glass frame shows through this inset
+        .onAppear {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.72)) { shown = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+                startRipple(at: CGPoint(x: imageSize.width / 2, y: imageSize.height / 2))
             }
-            .scaleEffect(shown ? 1 : 0.9)
-            .opacity(shown ? 1 : 0)
-            .padding(8)                // a thin Liquid-Glass frame shows through this inset
-            .onAppear {
-                origin = CGPoint(x: imageSize.width / 2, y: imageSize.height / 2)
-                withAnimation(.spring(response: 0.38, dampingFraction: 0.72)) { shown = true }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { trigger.toggle() }
-            }
+        }
+    }
+
+    private func startRipple(at point: CGPoint) {
+        origin = point
+        let now = Date()
+        rippleStart = now
+        // When this ripple finishes, pause the timeline — unless a later tap restarted it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + rippleDuration + 0.05) {
+            if rippleStart == now { rippleStart = nil }
+        }
     }
 }
