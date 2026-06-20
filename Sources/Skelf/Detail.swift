@@ -456,23 +456,40 @@ final class SkillDetailView: NSView {
         let host = NSHostingView(rootView: ArtworkPopupView(image: img, imageSize: CGSize(width: iw, height: ih)))
         host.frame = NSRect(x: 0, y: 0, width: w, height: h)
         host.autoresizingMask = [.width, .height]
-        host.layer?.backgroundColor = .clear
 
         // The Liquid-Glass frame shows through the SwiftUI view's padding.
         let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: w, height: h))
         glass.cornerRadius = radius
-        glass.autoresizingMask = [.width, .height]
         glass.contentView = host
 
+        // A container with a shadow that follows the ROUNDED corners. (A borderless window's own
+        // shadow is square, so its corners poke out past the rounded glass — the "sharp points".)
+        // The panel is the card plus a margin for the shadow to spread into.
+        let margin: CGFloat = 36
+        let pw = w + margin * 2, ph = h + margin * 2
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: pw, height: ph))
+        container.wantsLayer = true
+        glass.frame = NSRect(x: margin, y: margin, width: w, height: h)
+        let shadowLayer = CALayer()
+        shadowLayer.frame = glass.frame
+        shadowLayer.shadowColor = NSColor.black.cgColor
+        shadowLayer.shadowOpacity = 0.5
+        shadowLayer.shadowRadius = 22
+        shadowLayer.shadowOffset = CGSize(width: 0, height: -10)
+        shadowLayer.shadowPath = CGPath(roundedRect: CGRect(origin: .zero, size: NSSize(width: w, height: h)),
+                                        cornerWidth: radius, cornerHeight: radius, transform: nil)
+        container.layer?.addSublayer(shadowLayer)
+        container.addSubview(glass)
+
         // Borderless (no traffic-light close button); closes on Escape / click-away.
-        let panel = PaintingPanel(contentRect: NSRect(x: 0, y: 0, width: w, height: h),
+        let panel = PaintingPanel(contentRect: NSRect(x: 0, y: 0, width: pw, height: ph),
                                   styleMask: [.borderless], backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false        // the rounded shadowLayer replaces the square window shadow
         panel.isMovableByWindowBackground = true
         panel.isReleasedWhenClosed = false
-        panel.contentView = glass
+        panel.contentView = container
         panel.centerInScreen(self.window?.screen)
         panel.level = .floating
         panel.makeKeyAndOrderFront(nil)

@@ -84,10 +84,10 @@ final class SkillArtView: NSView {
     func setHoverZoom(_ on: Bool) {
         guard !AppSettings.shared.reduceMotion else { return }
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.4
+            ctx.duration = 0.28
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             ctx.allowsImplicitAnimation = true
-            imageLayer.transform = on ? CATransform3DMakeScale(1.1, 1.1, 1) : CATransform3DIdentity
+            imageLayer.transform = on ? CATransform3DMakeScale(1.06, 1.06, 1) : CATransform3DIdentity
         }
     }
     func resetZoom() { imageLayer.transform = CATransform3DIdentity }
@@ -257,17 +257,21 @@ final class CardRootView: NSView {
 // release (Disney active-state / squash; ~140ms ease-out, honors Reduce Motion). Used wherever
 // a button should feel pressable — card controls, the Copy button, the detail sidebar.
 final class AnimatedButton: NSButton {
+    // The view to scale on press — defaults to self, but glass controls set this to the visible
+    // glass circle (scaling the button *inside* the glass doesn't show through the effect).
+    weak var pressScaleTarget: NSView?
     override init(frame frameRect: NSRect) { super.init(frame: frameRect); wantsLayer = true }
     required init?(coder: NSCoder) { fatalError() }
     override var isHighlighted: Bool {
         didSet {
-            guard isHighlighted != oldValue, let l = layer, l.bounds.width > 1,
-                  !AppSettings.shared.reduceMotion else { return }
+            guard isHighlighted != oldValue, !AppSettings.shared.reduceMotion else { return }
+            let target = pressScaleTarget ?? self
+            guard let l = target.layer, l.bounds.width > 1 else { return }
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.14
+                ctx.duration = 0.09                       // snappy — immediate, responsive feedback
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 ctx.allowsImplicitAnimation = true
-                l.transform = isHighlighted ? centerScale(l, 0.92) : CATransform3DIdentity
+                l.transform = isHighlighted ? centerScale(l, 0.9) : CATransform3DIdentity
             }
         }
     }
@@ -307,6 +311,7 @@ final class GlassCircleButton: NSView {
             glass.leadingAnchor.constraint(equalTo: leadingAnchor),
             glass.trailingAnchor.constraint(equalTo: trailingAnchor)
         ])
+        button.pressScaleTarget = self      // scale the visible glass circle on press
     }
     required init?(coder: NSCoder) { fatalError() }
 }
