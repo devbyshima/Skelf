@@ -8,11 +8,9 @@ import CoreServices
 import ServiceManagement
 import Carbon.HIToolbox
 
-final class SkillDetailView: NSView, NSGestureRecognizerDelegate {
+final class SkillDetailView: NSView {
     var onBack: (() -> Void)?
     var onCopy: ((Skill) -> Void)?
-    var onToggleFavorite: ((Skill) -> Void)?
-    var onOrganize: ((Skill, NSView) -> Void)?
     private var skill: Skill?
     private var artToken = 0
 
@@ -25,10 +23,6 @@ final class SkillDetailView: NSView, NSGestureRecognizerDelegate {
     private let bannerPillBox = NSView()
     private let bannerPillLabel = NSTextField(labelWithString: "")
     private let bannerStatus = NSTextField(labelWithString: "")
-    private var headerBack: GlassCircleButton!
-    private var headerCopy: GlassCircleButton!
-    private var headerFav: GlassCircleButton!
-    private weak var folderAnchor: NSView?
 
     private let summaryLabel = NSTextField(wrappingLabelWithString: "")
     private let aiSummaryBox = NSView()                                   // on-device plain-English summary
@@ -70,9 +64,7 @@ final class SkillDetailView: NSView, NSGestureRecognizerDelegate {
         banner.translatesAutoresizingMaskIntoConstraints = false
         addSubview(banner)
         banner.toolTip = "Click to view the full image"
-        let bannerTap = NSClickGestureRecognizer(target: self, action: #selector(bannerClicked))
-        bannerTap.delegate = self      // …but never when a header glass control is what's clicked
-        banner.addGestureRecognizer(bannerTap)
+        banner.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(bannerClicked)))
         bannerName.font = .systemFont(ofSize: 28, weight: .bold)   // the page title — clearly largest
         bannerName.textColor = .white
         bannerName.lineBreakMode = .byTruncatingTail
@@ -92,21 +84,6 @@ final class SkillDetailView: NSView, NSGestureRecognizerDelegate {
         bannerStatus.textColor = NSColor.white.withAlphaComponent(0.9)
         bannerStatus.translatesAutoresizingMaskIntoConstraints = false
         banner.addSubview(bannerStatus)
-
-        // The page's topbar now lives in the banner: back (left); Copy / Favorite / Add-to-Folder
-        // (right). Glass circles stay legible over the artwork, matching the cards' controls.
-        headerBack = GlassCircleButton(symbol: "chevron.left", target: self, action: #selector(backTapped))
-        headerBack.translatesAutoresizingMaskIntoConstraints = false
-        banner.addSubview(headerBack)
-        headerCopy = GlassCircleButton(symbol: "doc.on.doc", target: self, action: #selector(headerCopyTapped))
-        headerFav = GlassCircleButton(symbol: "star", target: self, action: #selector(favoriteTapped))
-        let headerFolder = GlassCircleButton(symbol: "folder.badge.plus", target: self, action: #selector(organizeTapped))
-        folderAnchor = headerFolder
-        let headerActions = makeGlassControls([headerCopy, headerFav, headerFolder])
-        banner.addSubview(headerActions)
-        // The header controls now live in the transparent window toolbar (leveled with the traffic
-        // lights). Keep these wired but hidden so the banner shows clean art behind the toolbar.
-        headerBack.isHidden = true; headerActions.isHidden = true
 
         let bodyRow = NSView()
         bodyRow.translatesAutoresizingMaskIntoConstraints = false
@@ -288,10 +265,6 @@ final class SkillDetailView: NSView, NSGestureRecognizerDelegate {
             bannerPillLabel.centerYAnchor.constraint(equalTo: bannerPillBox.centerYAnchor),
             bannerStatus.leadingAnchor.constraint(equalTo: banner.leadingAnchor, constant: 24),
             bannerStatus.bottomAnchor.constraint(equalTo: bannerName.topAnchor, constant: -4),
-            headerBack.topAnchor.constraint(equalTo: banner.topAnchor, constant: 16),    // below the title-bar drag region
-            headerBack.leadingAnchor.constraint(equalTo: banner.leadingAnchor, constant: 84),  // clear the traffic lights
-            headerActions.topAnchor.constraint(equalTo: banner.topAnchor, constant: 16),
-            headerActions.trailingAnchor.constraint(equalTo: banner.trailingAnchor, constant: -16),
 
             bodyRow.topAnchor.constraint(equalTo: banner.bottomAnchor),
             bodyRow.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -469,13 +442,6 @@ final class SkillDetailView: NSView, NSGestureRecognizerDelegate {
     }
 
     // Clicking the banner → a small, FIXED-footprint floating Liquid-Glass panel that frames the
-    // Don't open the artwork popup when the click lands on a header glass control.
-    func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldAttemptToRecognizeWith event: NSEvent) -> Bool {
-        var v = banner.hitTest(banner.convert(event.locationInWindow, from: nil))
-        while let cur = v { if cur is GlassCircleButton { return false }; v = cur.superview }
-        return true
-    }
-
     // image at its own aspect ratio (SwiftUI `ArtworkPopupView`, with a Metal ripple shader).
     private var paintingPanel: NSPanel?
     @objc private func bannerClicked() {
@@ -606,26 +572,10 @@ final class SkillDetailView: NSView, NSGestureRecognizerDelegate {
         meta.addArrangedSubview(metaRow("Files", "\(skill.fileCount)"))
         meta.addArrangedSubview(metaRow("Installed", skill.installedAt))
         addCard(card("Details", meta))
-
-        // Favorite + Add to Folder moved to the banner header (build()); just sync header state.
-        isFav = isFavorite
-        setHeaderFavorite(isFavorite)
     }
 
     private weak var copyCmdButtonRef: NSButton?
-    private var isFav = false
     private var copyRevertToken = 0
-    private var headerCopyRevertToken = 0
-    /// Light favorite-state update (no full reconfigure) — drives the banner header's star.
-    func setFavorite(_ on: Bool) {
-        isFav = on
-        setHeaderFavorite(on)
-    }
-    private func setHeaderFavorite(_ on: Bool) {
-        headerFav?.button.image = NSImage(systemSymbolName: on ? "star.fill" : "star",
-                                          accessibilityDescription: on ? "Favorited" : "Favorite")
-        headerFav?.button.contentTintColor = on ? .systemYellow : .white
-    }
 
     private func addCard(_ c: NSView) {
         sidebarStack.addArrangedSubview(c)
@@ -633,29 +583,10 @@ final class SkillDetailView: NSView, NSGestureRecognizerDelegate {
     }
 
     @objc private func backTapped() { onBack?() }
-    @objc private func favoriteTapped() {
-        guard let s = skill else { return }
-        isFav.toggle()
-        setFavorite(isFav)        // flip the label/star now — don't wait for the SwiftUI round-trip
-        onToggleFavorite?(s)      // …then persist
-    }
-    @objc private func organizeTapped() { if let s = skill { onOrganize?(s, folderAnchor ?? sidebarStack) } }
     @objc private func copySlashTapped() {
         guard let s = skill else { return }
         onCopy?(s)
         flashCopied()
-    }
-    // The banner header's Copy glass button: copy, then flash a checkmark and settle back.
-    @objc private func headerCopyTapped() {
-        guard let s = skill else { return }
-        onCopy?(s)
-        headerCopy.button.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Copied")
-        headerCopyRevertToken += 1
-        let tok = headerCopyRevertToken
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak self] in
-            guard let self = self, self.headerCopyRevertToken == tok else { return }
-            self.headerCopy.button.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy")
-        }
     }
     // Briefly confirm the copy on the "Copy command" button, then settle back (mirrors the card's Copy).
     private func flashCopied() {
