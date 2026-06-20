@@ -113,7 +113,7 @@ final class SkillDetailView: NSView {
         reactiveBackground(aiSummaryBox) { NSColor.controlAccentColor.withAlphaComponent(0.10) }
         aiSummaryBox.translatesAutoresizingMaskIntoConstraints = false
         aiSummaryBox.isHidden = true
-        let aiHdr = NSTextField(labelWithString: "IN PLAIN ENGLISH")
+        let aiHdr = NSTextField(labelWithString: "EXPLANATION")
         aiHdr.font = .systemFont(ofSize: 10, weight: .semibold); aiHdr.textColor = .controlAccentColor
         aiHdr.translatesAutoresizingMaskIntoConstraints = false
         aiSummaryLabel.font = .systemFont(ofSize: 13.5)
@@ -411,7 +411,7 @@ final class SkillDetailView: NSView {
             Task { @MainActor [weak self] in
                 guard let summary = await SkillFinder.shared.summary(for: skill) else { return }
                 guard let self = self, self.skill?.id == sid else { return }   // still showing this skill
-                self.aiSummaryLabel.stringValue = summary.whatItDoes + " " + summary.whenToUse
+                self.aiSummaryLabel.stringValue = Self.composedExplanation(summary)
                 self.aiSummaryBox.isHidden = false
             }
         }
@@ -533,6 +533,18 @@ final class SkillDetailView: NSView {
         panel.makeKeyAndOrderFront(nil)
         panel.animateOpen(scaling: glass.layer)
         paintingPanel = panel
+    }
+
+    // "<what it does> — best for <use case>." — one flowing sentence rather than a tacked-on
+    // "When you need to…" clause.
+    private static func composedExplanation(_ s: SkillFinder.SkillSummary) -> String {
+        var what = s.whatItDoes.trimmingCharacters(in: .whitespacesAndNewlines)
+        while what.hasSuffix(".") { what.removeLast() }
+        var when = s.whenToUse.trimmingCharacters(in: .whitespacesAndNewlines)
+        while when.hasSuffix(".") { when.removeLast() }
+        if when.lowercased().hasPrefix("when ") { when.removeFirst(5) }   // model may still lead with "When"
+        if let f = when.first { when = f.lowercased() + when.dropFirst() }
+        return when.isEmpty ? what + "." : "\(what) — best for \(when)."
     }
 
     // A themed gradient stand-in when a skill's space image hasn't been cached yet.

@@ -513,7 +513,16 @@ final class SkillGridItem: NSCollectionViewItem {
     }
     override func mouseEntered(with event: NSEvent) {
         hovering = true; applyHover()
-        if let s = skill { SkillHoverTip.shared.schedule(for: s, at: NSEvent.mouseLocation, on: view.window?.screen) }
+        if let s = skill {
+            SkillHoverTip.shared.schedule(for: s, at: NSEvent.mouseLocation, on: view.window?.screen)
+            // Warm the on-device model while browsing, and pre-generate this skill's explanation if
+            // the pointer dwells — so opening the card shows it instantly instead of cold-starting.
+            SkillFinder.shared.prewarm()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+                guard let self = self, self.hovering, self.skill?.id == s.id else { return }
+                Task { _ = await SkillFinder.shared.summary(for: s) }
+            }
+        }
     }
     override func mouseMoved(with event: NSEvent) { SkillHoverTip.shared.update(cursor: NSEvent.mouseLocation) }
     override func mouseExited(with event: NSEvent) { hovering = false; applyHover(); SkillHoverTip.shared.cancel() }

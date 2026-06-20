@@ -117,7 +117,7 @@ final class SkillFinder {
     struct SkillSummary: Equatable {
         @Guide(description: "One plain, jargon-light sentence on what this skill does.")
         var whatItDoes: String
-        @Guide(description: "One short sentence on when to reach for it.")
+        @Guide(description: "The situation it's best for, as a short lowercase phrase — e.g. \"reviewing SwiftUI code\" or \"debugging shader performance\". Not a full sentence; do not start with \"When\".")
         var whenToUse: String
     }
 
