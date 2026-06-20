@@ -110,14 +110,14 @@ final class SkillDetailView: NSView {
         // take. Hidden until a summary arrives (and stays hidden when AI is unavailable).
         aiSummaryBox.wantsLayer = true
         aiSummaryBox.layer?.cornerRadius = 10
-        aiSummaryBox.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor
+        reactiveBackground(aiSummaryBox) { NSColor.controlAccentColor.withAlphaComponent(0.10) }
         aiSummaryBox.translatesAutoresizingMaskIntoConstraints = false
         aiSummaryBox.isHidden = true
         let aiHdr = NSTextField(labelWithString: "IN PLAIN ENGLISH")
         aiHdr.font = .systemFont(ofSize: 10, weight: .semibold); aiHdr.textColor = .controlAccentColor
         aiHdr.translatesAutoresizingMaskIntoConstraints = false
         aiSummaryLabel.font = .systemFont(ofSize: 13.5)
-        aiSummaryLabel.textColor = NSColor.labelColor.withAlphaComponent(0.95)
+        reactiveTextColor(aiSummaryLabel) { NSColor.labelColor.withAlphaComponent(0.95) }
         aiSummaryLabel.translatesAutoresizingMaskIntoConstraints = false
         let aiStack = NSStackView(views: [aiHdr, aiSummaryLabel])
         aiStack.orientation = .vertical; aiStack.alignment = .leading; aiStack.spacing = 5
@@ -142,14 +142,14 @@ final class SkillDetailView: NSView {
         readmeCard.wantsLayer = true
         readmeCard.layer?.cornerRadius = 8
         readmeCard.layer?.borderWidth = 1
-        readmeCard.layer?.borderColor = NSColor.separatorColor.cgColor
-        readmeCard.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+        reactiveBorder(readmeCard) { .separatorColor }
+        reactiveBackground(readmeCard) { .textBackgroundColor }
         readmeCard.layer?.masksToBounds = true
         readmeCard.translatesAutoresizingMaskIntoConstraints = false
         leftBox.addSubview(readmeCard)
         let hdr = NSView()
         hdr.wantsLayer = true
-        hdr.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        reactiveBackground(hdr) { .windowBackgroundColor }
         hdr.translatesAutoresizingMaskIntoConstraints = false
         let hdrIcon = NSImageView()
         hdrIcon.image = NSImage(systemSymbolName: "book.closed", accessibilityDescription: nil)
@@ -250,7 +250,7 @@ final class SkillDetailView: NSView {
             topDivider.leadingAnchor.constraint(equalTo: leadingAnchor),
             topDivider.trailingAnchor.constraint(equalTo: trailingAnchor),
 
-            banner.topAnchor.constraint(equalTo: topDivider.bottomAnchor),
+            banner.topAnchor.constraint(equalTo: topAnchor),   // fill to the very top (the back bar is never shown)
             banner.leadingAnchor.constraint(equalTo: leadingAnchor),
             banner.trailingAnchor.constraint(equalTo: trailingAnchor),
             banner.heightAnchor.constraint(equalToConstant: 230),
@@ -291,12 +291,34 @@ final class SkillDetailView: NSView {
         ])
     }
 
+    // CALayer colors are fixed CGColors that don't follow appearance changes, and
+    // `withAlphaComponent` drops a dynamic NSColor's appearance-awareness — so re-resolve both
+    // whenever the effective appearance flips (light ↔ dark).
+    private var dynamicColorUpdates: [() -> Void] = []
+    private func reactiveBackground(_ view: NSView, _ provider: @escaping () -> NSColor) {
+        view.wantsLayer = true
+        let apply: () -> Void = { [weak view] in view?.layer?.backgroundColor = provider().cgColor }
+        apply(); dynamicColorUpdates.append(apply)
+    }
+    private func reactiveBorder(_ view: NSView, _ provider: @escaping () -> NSColor) {
+        let apply: () -> Void = { [weak view] in view?.layer?.borderColor = provider().cgColor }
+        apply(); dynamicColorUpdates.append(apply)
+    }
+    private func reactiveTextColor(_ field: NSTextField, _ provider: @escaping () -> NSColor) {
+        let apply: () -> Void = { [weak field] in field?.textColor = provider() }
+        apply(); dynamicColorUpdates.append(apply)
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        effectiveAppearance.performAsCurrentDrawingAppearance { dynamicColorUpdates.forEach { $0() } }
+    }
+
     private func card(_ title: String?, _ content: NSView) -> NSView {
         let c = NSView()
         c.wantsLayer = true
         c.layer?.cornerRadius = 12; c.layer?.borderWidth = 1
-        c.layer?.borderColor = NSColor.separatorColor.cgColor
-        c.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        reactiveBorder(c) { .separatorColor }
+        reactiveBackground(c) { .controlBackgroundColor }
         c.translatesAutoresizingMaskIntoConstraints = false
         let stack = NSStackView()
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
