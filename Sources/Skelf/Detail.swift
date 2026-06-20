@@ -27,8 +27,13 @@ final class SkillDetailView: NSView {
     private let bannerStatus = NSTextField(labelWithString: "")
 
     private let summaryLabel = NSTextField(wrappingLabelWithString: "")
+    private let aiSummaryBox = NSView()                                   // on-device plain-English summary
+    private let aiSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let bodyText = NSTextView()   // SKILL.md body — scrolls internally for big files
     private let sidebarStack = NSStackView()
+    private weak var leftColumn: NSView?   // left content column + sidebar — for the open cascade
+    private weak var sideColumn: NSView?
+    private var lastAnimatedId = ""
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -60,11 +65,12 @@ final class SkillDetailView: NSView {
 
         banner.translatesAutoresizingMaskIntoConstraints = false
         addSubview(banner)
-        banner.toolTip = "Click for details about this painting"
+        banner.toolTip = "Click to view the full image"
         banner.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(bannerClicked)))
         bannerName.font = .systemFont(ofSize: 28, weight: .bold)   // the page title — clearly largest
         bannerName.textColor = .white
         bannerName.lineBreakMode = .byTruncatingTail
+        bannerName.shadow = legibilityShadow()
         bannerName.translatesAutoresizingMaskIntoConstraints = false
         banner.addSubview(bannerName)
         bannerPillBox.wantsLayer = true
@@ -92,6 +98,7 @@ final class SkillDetailView: NSView {
         let leftBox = NSView()
         leftBox.translatesAutoresizingMaskIntoConstraints = false
         bodyRow.addSubview(leftBox)
+        leftColumn = leftBox
 
         // Summary block (the description), pinned at the top.
         let summaryHeader = NSTextField(labelWithString: "SUMMARY")
@@ -101,10 +108,36 @@ final class SkillDetailView: NSView {
         summaryLabel.font = .systemFont(ofSize: 14.5)
         summaryLabel.textColor = .labelColor
         summaryLabel.translatesAutoresizingMaskIntoConstraints = false
-        let summaryBlock = NSStackView(views: [summaryHeader, summaryLabel])
+        // An accent-tinted callout under the raw description holding the model's plain-English
+        // take. Hidden until a summary arrives (and stays hidden when AI is unavailable).
+        aiSummaryBox.wantsLayer = true
+        aiSummaryBox.layer?.cornerRadius = 10
+        aiSummaryBox.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor
+        aiSummaryBox.translatesAutoresizingMaskIntoConstraints = false
+        aiSummaryBox.isHidden = true
+        let aiHdr = NSTextField(labelWithString: "IN PLAIN ENGLISH")
+        aiHdr.font = .systemFont(ofSize: 10, weight: .semibold); aiHdr.textColor = .controlAccentColor
+        aiHdr.translatesAutoresizingMaskIntoConstraints = false
+        aiSummaryLabel.font = .systemFont(ofSize: 13.5)
+        aiSummaryLabel.textColor = NSColor.labelColor.withAlphaComponent(0.95)
+        aiSummaryLabel.translatesAutoresizingMaskIntoConstraints = false
+        let aiStack = NSStackView(views: [aiHdr, aiSummaryLabel])
+        aiStack.orientation = .vertical; aiStack.alignment = .leading; aiStack.spacing = 5
+        aiStack.translatesAutoresizingMaskIntoConstraints = false
+        aiSummaryBox.addSubview(aiStack)
+        NSLayoutConstraint.activate([
+            aiStack.topAnchor.constraint(equalTo: aiSummaryBox.topAnchor, constant: 11),
+            aiStack.leadingAnchor.constraint(equalTo: aiSummaryBox.leadingAnchor, constant: 13),
+            aiStack.trailingAnchor.constraint(equalTo: aiSummaryBox.trailingAnchor, constant: -13),
+            aiStack.bottomAnchor.constraint(equalTo: aiSummaryBox.bottomAnchor, constant: -11)
+        ])
+
+        let summaryBlock = NSStackView(views: [summaryHeader, summaryLabel, aiSummaryBox])
         summaryBlock.orientation = .vertical; summaryBlock.alignment = .leading; summaryBlock.spacing = 6
+        summaryBlock.setCustomSpacing(12, after: summaryLabel)
         summaryBlock.translatesAutoresizingMaskIntoConstraints = false
         leftBox.addSubview(summaryBlock)
+        aiSummaryBox.widthAnchor.constraint(equalTo: summaryBlock.widthAnchor).isActive = true
 
         // GitHub-style README card: bordered, file-header bar, then the body in a scroll view.
         let readmeCard = NSView()
@@ -196,6 +229,7 @@ final class SkillDetailView: NSView {
         sidebarScroll.drawsBackground = false
         sidebarScroll.borderType = .noBorder
         bodyRow.addSubview(sidebarScroll)
+        sideColumn = sidebarScroll
         let sideClip = sidebarScroll.contentView
         let sideDoc = FlippedView()
         sideDoc.translatesAutoresizingMaskIntoConstraints = false
@@ -303,7 +337,7 @@ final class SkillDetailView: NSView {
     }
 
     private func sidebarButton(_ title: String, _ symbol: String, _ action: Selector, prominent: Bool = false) -> NSButton {
-        let b = NSButton(title: " " + title, target: self, action: action)
+        let b = AnimatedButton(title: " " + title, target: self, action: action)
         b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
         b.imagePosition = .imageLeading
         b.bezelStyle = .rounded
@@ -314,6 +348,8 @@ final class SkillDetailView: NSView {
     }
 
     func configure(_ skill: Skill, isFavorite: Bool) {
+        let isNewSkill = skill.id != lastAnimatedId
+        lastAnimatedId = skill.id
         self.skill = skill
         artToken += 1
         let token = artToken
@@ -337,6 +373,19 @@ final class SkillDetailView: NSView {
         // main thread (the navigation push stays smooth) and swap it in, caching for re-opens.
         summaryLabel.stringValue = skill.description.isEmpty ? "No description in SKILL.md." : skill.description
         let sid = skill.id
+
+        // On-device plain-English summary (Foundation Models) — additive, async, cached in
+        // SkillFinder. Hidden when AI is unavailable or generation fails; the raw description
+        // above always stands on its own.
+        aiSummaryBox.isHidden = true
+        if SkillFinder.shared.isAvailable {
+            Task { @MainActor [weak self] in
+                guard let summary = await SkillFinder.shared.summary(for: skill) else { return }
+                guard let self = self, self.skill?.id == sid else { return }   // still showing this skill
+                self.aiSummaryLabel.stringValue = summary.whatItDoes + " " + summary.whenToUse
+                self.aiSummaryBox.isHidden = false
+            }
+        }
         if let cached = Self.mdCache[sid] {
             setBody(cached)
         } else {
@@ -360,6 +409,27 @@ final class SkillDetailView: NSView {
         }
 
         rebuildSidebar(skill, isFavorite: isFavorite, creator: creator, token: token)
+        if isNewSkill { animateContentIn() }
+    }
+
+    // A gentle staggered entrance when a skill opens: banner, then the left column, then the
+    // sidebar cascade up and fade in (ease-out, ≤ 340ms; matches the grid's open transition).
+    private func animateContentIn() {
+        guard !AppSettings.shared.reduceMotion else { return }
+        let cols: [(NSView?, TimeInterval)] = [(banner, 0), (leftColumn, 0.05), (sideColumn, 0.11)]
+        for (v, delay) in cols {
+            guard let l = v?.layer else { continue }
+            let start = CATransform3DMakeTranslation(0, -16, 0)
+            let tA = CABasicAnimation(keyPath: "transform"); tA.fromValue = start; tA.toValue = CATransform3DIdentity
+            let oA = CABasicAnimation(keyPath: "opacity"); oA.fromValue = 0; oA.toValue = 1
+            for a in [tA, oA] {
+                a.duration = 0.34
+                a.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                a.beginTime = CACurrentMediaTime() + delay
+                a.fillMode = .backwards
+            }
+            l.add(tA, forKey: "openInT"); l.add(oA, forKey: "openInO")
+        }
     }
 
     private static var mdCache: [String: NSAttributedString] = [:]
@@ -368,99 +438,58 @@ final class SkillDetailView: NSView {
         bodyText.scroll(NSPoint(x: 0, y: 0))   // reset scroll to top for the new skill
     }
 
-    // Clicking the banner painting → a floating Liquid-Glass panel CENTERED on screen. The
-    // layout ADAPTS to the artwork: a landscape painting sits full-bleed on top with the info
-    // below; a portrait painting sits on the LEFT (shown whole, never cropped) with the info
-    // on the RIGHT.
+    // Clicking the banner → a small, FIXED-footprint floating Liquid-Glass panel that frames the
+    // image at its own aspect ratio (SwiftUI `ArtworkPopupView`, with a Metal ripple shader).
     private var paintingPanel: NSPanel?
     @objc private func bannerClicked() {
         guard let skill = skill else { return }
-        let img = ArtStore.shared.cached(skill.id)
-        let aspect: CGFloat = (img.map { $0.size.width > 0 ? $0.size.height / $0.size.width : 1.31 }) ?? 420.0 / 320.0
-        let portrait = aspect > 1.12
-        let screenMaxH = ((self.window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 900) - 100
-        let radius: CGFloat = 20
+        let img = ArtStore.shared.cached(skill.id) ?? Self.fallbackImage(skill)
+        // Fixed footprint: the image's LONGEST side is `maxSide`, ratio preserved (capped to screen).
+        let aspect = img.size.width > 0 ? img.size.height / img.size.width : 0.66
+        let vf = (self.window?.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let maxSide: CGFloat = min(680, min(vf.width, vf.height) - 120)
+        let iw = (aspect > 1 ? maxSide / aspect : maxSide).rounded()
+        let ih = (aspect > 1 ? maxSide : maxSide * aspect).rounded()
+        let pad: CGFloat = 5, radius: CGFloat = 16
+        let w = iw + pad * 2, h = ih + pad * 2
 
-        let art = SkillArtView(); art.showScrim = false
-        art.translatesAutoresizingMaskIntoConstraints = false
-        if let img = img { art.setAvatar(img) } else { art.setThemedFallback(skill) }
+        let host = NSHostingView(rootView: ArtworkPopupView(image: img, imageSize: CGSize(width: iw, height: ih)))
+        host.frame = NSRect(x: 0, y: 0, width: w, height: h)
+        host.autoresizingMask = [.width, .height]
 
-        let infoColW: CGFloat = portrait ? 480 : 760
-        let info = paintingInfo(skill, columnWidth: infoColW)
-        info.translatesAutoresizingMaskIntoConstraints = false
-        info.layoutSubtreeIfNeeded()
-        let infoH = ceil(info.fittingSize.height)
-
-        let card = NSView(); card.wantsLayer = true
-        card.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(art); card.addSubview(info)
-
-        var w: CGFloat, h: CGFloat
-        if portrait {
-            // image LEFT, fills the panel height at the painting's exact aspect (no crop); info RIGHT
-            h = max(infoH, 560)
-            let imageW = (h / aspect).rounded()
-            w = imageW + infoColW
-            NSLayoutConstraint.activate([
-                art.topAnchor.constraint(equalTo: card.topAnchor),
-                art.bottomAnchor.constraint(equalTo: card.bottomAnchor),
-                art.leadingAnchor.constraint(equalTo: card.leadingAnchor),
-                art.widthAnchor.constraint(equalToConstant: imageW),
-                info.topAnchor.constraint(equalTo: card.topAnchor),
-                info.leadingAnchor.constraint(equalTo: art.trailingAnchor),
-                info.trailingAnchor.constraint(equalTo: card.trailingAnchor),
-                info.widthAnchor.constraint(equalToConstant: infoColW),
-                card.widthAnchor.constraint(equalToConstant: w),
-                card.heightAnchor.constraint(equalToConstant: h)
-            ])
-        } else {
-            // image TOP full-bleed, info BELOW
-            w = 760
-            let imgH = min(w * aspect, 440)
-            h = imgH + infoH
-            NSLayoutConstraint.activate([
-                art.topAnchor.constraint(equalTo: card.topAnchor),
-                art.leadingAnchor.constraint(equalTo: card.leadingAnchor),
-                art.trailingAnchor.constraint(equalTo: card.trailingAnchor),
-                art.heightAnchor.constraint(equalToConstant: imgH),
-                info.topAnchor.constraint(equalTo: art.bottomAnchor),
-                info.leadingAnchor.constraint(equalTo: card.leadingAnchor),
-                info.trailingAnchor.constraint(equalTo: card.trailingAnchor),
-                card.widthAnchor.constraint(equalToConstant: w),
-                card.heightAnchor.constraint(equalToConstant: h)
-            ])
-        }
-
-        let panelH = min(h, screenMaxH)
-        let content: NSView
-        if h > screenMaxH {                            // taller than the screen → scroll the whole card
-            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: w, height: panelH))
-            scroll.autoresizingMask = [.width, .height]
-            scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
-            scroll.drawsBackground = false; scroll.borderType = .noBorder
-            scroll.documentView = card
-            content = scroll
-        } else {
-            content = card
-        }
-
-        let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: w, height: panelH))
+        // The Liquid-Glass frame shows through the SwiftUI view's padding.
+        let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: w, height: h))
         glass.cornerRadius = radius
-        glass.autoresizingMask = [.width, .height]
-        glass.contentView = content
-        content.wantsLayer = true
-        content.layer?.cornerRadius = radius
-        content.layer?.masksToBounds = true
+        glass.contentView = host
+
+        // A container with a shadow that follows the ROUNDED corners. (A borderless window's own
+        // shadow is square, so its corners poke out past the rounded glass — the "sharp points".)
+        // The panel is the card plus a margin for the shadow to spread into.
+        let margin: CGFloat = 36
+        let pw = w + margin * 2, ph = h + margin * 2
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: pw, height: ph))
+        container.wantsLayer = true
+        glass.frame = NSRect(x: margin, y: margin, width: w, height: h)
+        let shadowLayer = CALayer()
+        shadowLayer.frame = glass.frame
+        shadowLayer.shadowColor = NSColor.black.cgColor
+        shadowLayer.shadowOpacity = 0.5
+        shadowLayer.shadowRadius = 22
+        shadowLayer.shadowOffset = CGSize(width: 0, height: -10)
+        shadowLayer.shadowPath = CGPath(roundedRect: CGRect(origin: .zero, size: NSSize(width: w, height: h)),
+                                        cornerWidth: radius, cornerHeight: radius, transform: nil)
+        container.layer?.addSublayer(shadowLayer)
+        container.addSubview(glass)
 
         // Borderless (no traffic-light close button); closes on Escape / click-away.
-        let panel = PaintingPanel(contentRect: NSRect(x: 0, y: 0, width: w, height: panelH),
+        let panel = PaintingPanel(contentRect: NSRect(x: 0, y: 0, width: pw, height: ph),
                                   styleMask: [.borderless], backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false        // the rounded shadowLayer replaces the square window shadow
         panel.isMovableByWindowBackground = true
         panel.isReleasedWhenClosed = false
-        panel.contentView = glass
+        panel.contentView = container
         panel.centerInScreen(self.window?.screen)
         panel.level = .floating
         panel.makeKeyAndOrderFront(nil)
@@ -468,84 +497,16 @@ final class SkillDetailView: NSView {
         paintingPanel = panel
     }
 
-    // The info column shown beside/under the painting: title, artist, facts, the museum
-    // description, and a highlighted "why this painting" callout. Padded; intrinsic height.
-    private func paintingInfo(_ skill: Skill, columnWidth colW: CGFloat) -> NSView {
-        let d = ArtStore.shared.details(skill.id)
-        let pad: CGFloat = 24, innerW = colW - pad * 2
-        let box = NSView()
-        box.translatesAutoresizingMaskIntoConstraints = false
-
-        func lbl(_ s: String, _ size: CGFloat, _ w: NSFont.Weight, _ c: NSColor, lineSpacing: CGFloat = 0, width: CGFloat) -> NSTextField {
-            let l = NSTextField(wrappingLabelWithString: s)
-            l.font = .systemFont(ofSize: size, weight: w); l.textColor = c
-            l.translatesAutoresizingMaskIntoConstraints = false
-            if lineSpacing > 0 {
-                let p = NSMutableParagraphStyle(); p.lineSpacing = lineSpacing
-                l.attributedStringValue = NSAttributedString(string: s,
-                    attributes: [.font: l.font!, .foregroundColor: c, .paragraphStyle: p])
-            }
-            l.widthAnchor.constraint(equalToConstant: width).isActive = true
-            return l
-        }
-        func sectionHeader(_ s: String, _ c: NSColor = .tertiaryLabelColor) -> NSTextField {
-            let l = NSTextField(labelWithString: s)
-            l.font = .systemFont(ofSize: 10.5, weight: .semibold); l.textColor = c
-            l.translatesAutoresizingMaskIntoConstraints = false
-            return l
-        }
-
-        let stack = NSStackView()
-        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 4
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(lbl(d?.title ?? "Generated cover art", 19, .bold, .labelColor, width: innerW))
-        if let a = d?.artist, !a.isEmpty {
-            stack.setCustomSpacing(3, after: stack.arrangedSubviews.last!)
-            stack.addArrangedSubview(lbl(a, 14, .regular, .secondaryLabelColor, width: innerW))
-        }
-        let facts = [d?.date, d?.origin, d?.medium, d?.dimensions].compactMap { $0 }.filter { !$0.isEmpty }
-        if !facts.isEmpty {
-            stack.setCustomSpacing(8, after: stack.arrangedSubviews.last!)
-            stack.addArrangedSubview(lbl(facts.joined(separator: " · "), 11.5, .regular, .secondaryLabelColor, lineSpacing: 2, width: innerW))
-        }
-        if let desc = d?.description, !desc.isEmpty {
-            stack.setCustomSpacing(18, after: stack.arrangedSubviews.last!)
-            let ah = sectionHeader("ABOUT THIS PAINTING"); stack.addArrangedSubview(ah)
-            stack.setCustomSpacing(7, after: ah)
-            stack.addArrangedSubview(lbl(desc, 13, .regular, NSColor.labelColor.withAlphaComponent(0.9), lineSpacing: 3, width: innerW))
-        }
-
-        let whyBox = NSView()
-        whyBox.wantsLayer = true
-        whyBox.layer?.cornerRadius = 10
-        whyBox.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
-        whyBox.translatesAutoresizingMaskIntoConstraints = false
-        let whyHdr = sectionHeader("WHY THIS PAINTING FOR THIS SKILL", .controlAccentColor)
-        let whyText = (d?.why).flatMap { $0.isEmpty ? nil : $0 } ?? "This skill uses a generated cover (no museum painting matched)."
-        let whyLbl = lbl(whyText, 13.5, .medium, .labelColor, lineSpacing: 2, width: innerW - 28)
-        let whyStack = NSStackView(views: [whyHdr, whyLbl])
-        whyStack.orientation = .vertical; whyStack.alignment = .leading; whyStack.spacing = 6
-        whyStack.translatesAutoresizingMaskIntoConstraints = false
-        whyBox.addSubview(whyStack)
-        NSLayoutConstraint.activate([
-            whyStack.topAnchor.constraint(equalTo: whyBox.topAnchor, constant: 12),
-            whyStack.leadingAnchor.constraint(equalTo: whyBox.leadingAnchor, constant: 14),
-            whyStack.trailingAnchor.constraint(equalTo: whyBox.trailingAnchor, constant: -14),
-            whyStack.bottomAnchor.constraint(equalTo: whyBox.bottomAnchor, constant: -12),
-            whyBox.widthAnchor.constraint(equalToConstant: innerW)
-        ])
-        stack.setCustomSpacing(18, after: stack.arrangedSubviews.last!)
-        stack.addArrangedSubview(whyBox)
-
-        box.addSubview(stack)
-        NSLayoutConstraint.activate([
-            box.widthAnchor.constraint(equalToConstant: colW),
-            stack.topAnchor.constraint(equalTo: box.topAnchor, constant: pad),
-            stack.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: pad),
-            stack.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -pad),
-            stack.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -pad)
-        ])
-        return box
+    // A themed gradient stand-in when a skill's space image hasn't been cached yet.
+    private static func fallbackImage(_ skill: Skill) -> NSImage {
+        let size = NSSize(width: 480, height: 360)
+        let img = NSImage(size: size)
+        img.lockFocus()
+        let cols = Palette.gradientColors(skill.id).compactMap { NSColor(cgColor: $0) }
+        (NSGradient(colors: cols.count >= 2 ? cols : [.darkGray, .black]))?
+            .draw(in: NSRect(origin: .zero, size: size), angle: -60)
+        img.unlockFocus()
+        return img
     }
 
     private func rebuildSidebar(_ skill: Skill, isFavorite: Bool, creator: String?, token: Int) {

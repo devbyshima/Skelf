@@ -6,6 +6,40 @@ All notable changes to Skelf are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-20
+
+### Changed
+
+- A look-and-feel revamp with Metal-shader and motion polish (all honoring Reduce Motion):
+  - The artwork popup is rebuilt in SwiftUI — a fixed-size, ratio-preserving card in a thin
+    Liquid-Glass frame with a Metal **ripple** shader that radiates on open and on click.
+  - Skill cards gain a parallax artwork **zoom on hover** and a crossfade + **shimmer** sweep
+    as each NASA image loads in.
+  - Folders, skills, and the detail view **cascade in** with a staggered ease-out entrance.
+  - Tactile **press feedback** on every button (card controls, Copy, detail sidebar), a green
+    copy-confirmation wash, and an expanding ring when a skill is favorited.
+  - A subtle legibility shadow on card and banner text over the space art.
+
+## [1.2.0] - 2026-06-20
+
+### Added
+
+- On-device natural-language skill search. Type a task in plain words ("my emails keep
+  landing in spam", "review my Swift for data races") and Skelf ranks the skills that fit,
+  powered by Apple's Foundation Models — fully on-device, offline, and private. It augments
+  the search box in both the main window and the menu-bar popover, and falls back to the
+  existing substring search when Apple Intelligence is unavailable.
+- Plain-English skill summaries. The detail view shows an on-device, jargon-light "in plain
+  English" take on each skill beneath its raw description.
+- An "On-Device AI Search" toggle in **Settings ▸ Intelligence** (default on).
+
+### Changed
+
+- Skill-card art is now public-domain space imagery from NASA, drawn from a hand-curated
+  pool and assigned a distinct image per skill — replacing the Art Institute paintings.
+  Clicking a card's banner now opens the full image edge-to-edge. Generated offline art
+  remains the fallback when covers are off or a download fails.
+
 ## [1.1.0] - 2026-06-19
 
 ### Added
@@ -44,7 +78,9 @@ All notable changes to Skelf are documented here. The format is based on
 - Restructured from a single source file into focused files under `Sources/Skelf/`, added a
   SwiftPM `Package.swift` (opens in Xcode / `swift build`), CI, SwiftLint, and contributor docs.
 
-[Unreleased]: https://github.com/devbyshima/Skelf/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/devbyshima/Skelf/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.3.0
+[1.2.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.2.0
 [1.1.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.1.0
 [1.0.1]: https://github.com/devbyshima/Skelf/releases/tag/v1.0.1
 [1.0.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.0.0

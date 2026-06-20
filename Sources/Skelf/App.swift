@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppSettings.shared.applyOnLaunch()    // restore Menu-Bar-Only (Dock icon) before the UI shows
         store.reload()
+        ArtStore.shared.updateAssignment(store.skills.map { $0.id })   // assign a distinct NASA image per skill
         folders.undoManager = undoManager
         folders.syncInstalled(Set(store.skills.map { $0.id }))
         verifyAndCategorize()
@@ -157,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     @objc private func showAbout() {
         let a = NSAlert()
         a.messageText = "Skelf"
-        a.informativeText = "A menu-bar browser for your installed Claude Code skills.\n\n\(store.skills.count) skills installed."
+        a.informativeText = "A menu-bar browser for your installed Claude Code skills.\n\n\(store.skills.count) skills installed.\n\nCard art is public-domain imagery courtesy of NASA (images.nasa.gov). Skelf isn’t affiliated with or endorsed by NASA."
         a.addButton(withTitle: "OK")
         a.runModal()
     }
@@ -217,6 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 
     private func reloadFromDisk(auto: Bool) {
         store.reload()
+        ArtStore.shared.updateAssignment(store.skills.map { $0.id })
         folders.syncInstalled(Set(store.skills.map { $0.id }))
         verifyAndCategorize()
         popoverController?.reload()
