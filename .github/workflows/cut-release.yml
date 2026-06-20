@@ -1,0 +1,90 @@
+name: Cut Release
+
+# One-click releasing. Run this (Actions → Cut Release → Run workflow), pick the bump, and it:
+#   1. bumps SKELF_VERSION + SKELF_BUILD in build.sh,
+#   2. renames the CHANGELOG's "## [Unreleased]" section to the new version (its accumulated
+#      notes move with it) and leaves a fresh empty "## [Unreleased]",
+#   3. commits to main and pushes an annotated `vX.Y.Z` tag —
+# which fires release.yml to build Skelf.app, package the DMG, and publish the GitHub Release.
+#
+# So the normal flow is: land changes, accumulating notes under "## [Unreleased]" in
+# CHANGELOG.md, then run this when you want to ship. No manual version edits or tagging.
+#
+# NOTE: this pushes the version-bump commit straight to `main`. If `main` is protected, allow
+# this workflow (or the github-actions bot) to bypass the rule, or it can't push the commit.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Semantic-version bump'
+        required: true
+        type: choice
+        options: [patch, minor, major]
+        default: minor
+
+permissions:
+  contents: write   # push the commit + tag
+
+concurrency: cut-release   # never cut two releases at once
+
+jobs:
+  cut:
+    name: Bump, tag & trigger release
+    runs-on: ubuntu-latest   # pure shell/git — the macOS build runs in release.yml on the tag
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: v
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          cur=$(grep -E '^SKELF_VERSION=' build.sh | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
+          bld=$(grep -E '^SKELF_BUILD=' build.sh | sed -E 's/.*"([0-9]+)".*/\1/')
+          IFS=. read -r MA MI PA <<< "$cur"
+          case "$BUMP" in
+            major) MA=$((MA+1)); MI=0; PA=0 ;;
+            minor) MI=$((MI+1)); PA=0 ;;
+            patch) PA=$((PA+1)) ;;
+          esac
+          {
+            echo "next=$MA.$MI.$PA"
+            echo "build=$((bld+1))"
+            echo "date=$(date +%F)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Bump version & promote changelog
+        env:
+          NEXT: ${{ steps.v.outputs.next }}
+          BUILD: ${{ steps.v.outputs.build }}
+          DATE: ${{ steps.v.outputs.date }}
+          REPO: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sed -i -E "s/^SKELF_VERSION=\"[0-9.]+\"/SKELF_VERSION=\"$NEXT\"/" build.sh
+          sed -i -E "s/^SKELF_BUILD=\"[0-9]+\"/SKELF_BUILD=\"$BUILD\"/" build.sh
+          # Turn the first "## [Unreleased]" into a fresh empty one + the new version heading; the
+          # notes that were under Unreleased now sit under the new version.
+          awk -v v="$NEXT" -v d="$DATE" '
+            !done && /^## \[Unreleased\]/ { print; print ""; print "## [" v "] - " d; done=1; next }
+            { print }
+          ' CHANGELOG.md > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
+          # Footer links: repoint Unreleased at the new tag and add the new release link.
+          sed -i -E "s#^\[Unreleased\]:.*#[Unreleased]: $REPO/compare/v$NEXT...HEAD\n[$NEXT]: $REPO/releases/tag/v$NEXT#" CHANGELOG.md
+
+      - name: Commit, tag & push
+        env:
+          NEXT: ${{ steps.v.outputs.next }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release $NEXT"
+          git tag -a "v$NEXT" -m "Skelf $NEXT"
+          git push origin main "refs/tags/v$NEXT"
+          echo "Pushed v$NEXT — release.yml will build & publish it." >> "$GITHUB_STEP_SUMMARY"
