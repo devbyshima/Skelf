@@ -366,6 +366,18 @@ final class FolderStore {
     // --- reads ---
     func node(_ id: String) -> Node? { nodes[id] }
     func childFolders(of id: String) -> [Node] { (nodes[id]?.folders ?? []).compactMap { nodes[$0] } }
+    // Flattened folder tree for a SwiftUI picker menu (root first, children indented).
+    func pickerList() -> [(id: String, title: String)] {
+        var out: [(id: String, title: String)] = []
+        func walk(_ id: String, _ depth: Int) {
+            guard let node = node(id) else { return }
+            let name = id == rootId ? "All Skills" : node.name
+            out.append((id, String(repeating: "    ", count: depth) + name))
+            for c in node.folders { walk(c, depth + 1) }
+        }
+        walk(rootId, 0)
+        return out
+    }
     func skillIds(in id: String) -> [String] { nodes[id]?.skills ?? [] }
     /// Every real folder in the tree (root excluded), name-sorted — for global search.
     func allFolders() -> [Node] {
