@@ -276,23 +276,15 @@ struct DetailRepresentable: NSViewRepresentable {
         v.setShowsBackBar(false)
         v.onBack = { if !model.path.isEmpty { model.path.removeLast() } }
         v.onCopy = { model.copySkill($0) }
-        v.onToggleFavorite = { model.favorites.toggle($0.id) }
-        v.onOrganize = { skill, anchor in
-            let menu = folderPickerMenu(model.folders) { target in
-                model.folders.copySkill(skill.id, to: target); Sound.play(.move)
-            }
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 4), in: anchor)
-        }
         return v
     }
     func updateNSView(_ v: SkillDetailView, context: Context) {
         let c = context.coordinator
-        // full reconfigure (re-renders the SKILL.md) only when the skill or data changes…
+        // full reconfigure (re-renders the SKILL.md) only when the skill or data changes.
         if let s = model.skill(skillId), c.lastSkillId != skillId || c.lastToken != token {
             v.configure(s, isFavorite: model.favorites.isFavorite(skillId))
             c.lastSkillId = skillId; c.lastToken = token
         }
-        v.setFavorite(model.favorites.isFavorite(skillId))   // …favorite-only changes are a light update
     }
 }
 

@@ -309,9 +309,6 @@ final class GlassCircleButton: NSView {
         button.pressScaleTarget = self      // scale the visible glass circle on press
     }
     required init?(coder: NSCoder) { fatalError() }
-    // On the skill page these sit in the window's title-bar region — opt out of window dragging so
-    // clicks reach the button instead of moving the window.
-    override var mouseDownCanMoveWindow: Bool { false }
 }
 
 // Group glass controls into one NSGlassEffectContainerView → a single sampling pass.
