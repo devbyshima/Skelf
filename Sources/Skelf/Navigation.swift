@@ -85,9 +85,12 @@ struct SettingsView: View {
                     .labelsHidden().pickerStyle(.segmented).fixedSize()
                 }
             }
+            Section("Intelligence") {
+                row("On-Device AI Search", "Find skills by what they do — type a task in plain words — and show plain-English summaries. Runs entirely on-device via Apple Intelligence; needs a supported Mac and falls back to plain search when unavailable.", $settings.useAIFeatures)
+            }
             Section("Appearance & Feedback") {
-                row("Show Painting Covers", "Use museum paintings on skill cards. Off uses generated art (fully offline).", $settings.usePaintings)
-                buttonRow("Refresh Painting Art", "Clear the downloaded paintings and fetch them again.",
+                row("Show Art Covers", "Use NASA space imagery on skill cards. Off uses generated art (fully offline).", $settings.usePaintings)
+                buttonRow("Refresh Art", "Clear the downloaded art and fetch it again.",
                           button: refreshing ? "Refreshing…" : "Refresh", disabled: refreshing || !settings.usePaintings) {
                     refreshing = true
                     ArtStore.shared.clearCache()

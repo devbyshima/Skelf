@@ -231,6 +231,11 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     private var currentId: String
     private var query = ""
 
+    // On-device AI search (Foundation Models), mirroring the main window's grid finder.
+    private var aiRanked: (query: String, ids: [String])?
+    private var pendingRankQuery: String?
+    private var rankTask: Task<Void, Never>?
+
     private let titleLabel = NSTextField(labelWithString: "Skelf")
     private let backButton = NSButton()
     private let windowButton = NSButton()
@@ -260,6 +265,8 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         currentId = folders.rootId
         query = ""
         searchField.stringValue = ""
+        aiRanked = nil; pendingRankQuery = nil
+        rankTask?.cancel(); rankTask = nil
         toastWindow?.dismiss()
     }
 
@@ -404,6 +411,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     override func viewDidAppear() {
         super.viewDidAppear()
         view.window?.makeFirstResponder(searchField)   // focus search, no stray focus glow
+        SkillFinder.shared.prewarm()                    // warm the on-device model for a snappy first query
     }
 
     func reload() {
@@ -425,10 +433,25 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
             // (every folder + every skill; matched on name/description/category/source;
             // enabled before off, name order), so search behaves identically in both.
             let foundFolders = folders.allFolders().filter { $0.name.lowercased().contains(q) }
-            let matched = store.skills.filter {
+            var matched = store.skills.filter {
                 $0.name.lowercased().contains(q) || $0.category.lowercased().contains(q)
                     || $0.description.lowercased().contains(q) || $0.source.lowercased().contains(q)
             }
+
+            // On-device AI fallback (same behavior as the main window grid): when a literal
+            // search finds little but the query reads like a task, rank by what skills do.
+            let rawQuery = query.trimmingCharacters(in: .whitespaces)
+            if SkillFinder.shared.isAvailable, Self.looksLikeNaturalLanguage(rawQuery), matched.count <= 2 {
+                if let ranked = aiRanked, ranked.query == q {
+                    let byId = Dictionary(store.skills.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+                    let aiSkills = ranked.ids.compactMap { byId[$0] }
+                    let aiIds = Set(ranked.ids)
+                    matched = aiSkills + matched.filter { !aiIds.contains($0.id) }
+                } else {
+                    startAIRank(for: q, rawQuery: rawQuery)
+                }
+            }
+
             let ordered = matched.filter { $0.enabled } + matched.filter { !$0.enabled }
             if ordered.isEmpty && foundFolders.isEmpty { addEmpty("Nothing matches.") } else {
                 if !foundFolders.isEmpty { addSection("Folders", foundFolders.map { folderRow($0) }) }
@@ -727,7 +750,37 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         a.runModal()
     }
 
-    func controlTextDidChange(_ obj: Notification) { query = searchField.stringValue; reload() }
+    private static func looksLikeNaturalLanguage(_ s: String) -> Bool {
+        s.split(whereSeparator: { $0 == " " }).filter { !$0.isEmpty }.count >= 2
+    }
+
+    /// Ask the on-device model to rank skills for `q`, then re-reload with the ranking.
+    /// One request in flight; a query change cancels it. Failures keep the substring list.
+    private func startAIRank(for q: String, rawQuery: String) {
+        guard pendingRankQuery != q else { return }
+        pendingRankQuery = q
+        rankTask?.cancel()
+        let candidates = store.skills
+        rankTask = Task { @MainActor [weak self] in
+            let ids = await SkillFinder.shared.rank(query: rawQuery, candidates: candidates)
+            guard let self = self, !Task.isCancelled else { return }
+            self.pendingRankQuery = nil
+            guard let ids = ids, self.query.trimmingCharacters(in: .whitespaces).lowercased() == q else { return }
+            self.aiRanked = (q, ids)
+            self.reload()
+        }
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        let new = searchField.stringValue
+        if new != query {                       // a new search invalidates any AI ranking in flight/cached
+            aiRanked = nil; pendingRankQuery = nil
+            rankTask?.cancel(); rankTask = nil
+            if SkillFinder.shared.isAvailable && !new.isEmpty { SkillFinder.shared.prewarm() }
+        }
+        query = new
+        reload()
+    }
 }
 
 // MARK: - App delegate

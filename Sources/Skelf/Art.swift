@@ -119,34 +119,23 @@ final class AvatarStore {
     }
 }
 
-// Per-skill card art: a UNIQUE, publicly-available (Creative-Commons) image themed to
-// each skill, sourced from a bundled `art-map.json` (skill id → CC image URL, deduped so
-// no two skills share art). Downloads are disk-cached like avatars. A skill with no map
-// entry (or offline) falls back to a GENERATED themed image (unique gradient + a
-// purpose-matched icon) — so every skill always has its own distinct art. Folders keep
-// their creator avatar (AvatarStore); only skill cards use this.
+// Per-skill card art: a stunning NASA public-domain space image, drawn from a bundled pool
+// (`art-map.json` = a list of image URLs) and assigned to each skill by a stable hash with
+// linear-probe dedup, so every skill — present or future, for any user — gets its own
+// distinct image. Downloads are disk-cached like avatars. With covers off (or on a fetch
+// failure) a skill falls back to a GENERATED themed image (gradient + purpose-matched icon).
+// Folders keep their creator avatar (AvatarStore); only skill cards use this.
 final class ArtStore {
     static let shared = ArtStore()
-    struct Entry: Decodable {
-        let url: String
-        let title: String?; let artist: String?; let date: String?; let why: String?
-        let medium: String?; let origin: String?; let dimensions: String?; let description: String?
-        let by: String?; let license: String?
-    }
-    // What the banner popover shows about a skill's painting.
-    struct Details {
-        let title: String; let artist: String; let date: String
-        let medium: String; let origin: String; let dimensions: String; let description: String
-        let why: String; let license: String
-    }
-    private var map: [String: Entry] = [:]
+    private var pool: [String] = []                            // bundled NASA image URLs (art-map.json)
+    private var assignment: [String: Int] = [:]                // skill id → pool index (deduped)
     private var mem: [String: NSImage] = [:]
     private var failed: Set<String> = []
     private var inflight: Set<String> = []
     private var waiters: [String: [(NSImage) -> Void]] = [:]   // cards awaiting an in-flight download
-    private var usedImages: Set<String> = []                   // AIC image ids already taken (dedup)
-    private var runtimeAttribution: [String: String] = [:]     // skill id → "Title — Artist" for runtime picks
-    private var runtimeWhy: [String: String] = [:]             // skill id → why-this-painting (runtime)
+    // Bump when the art SOURCE changes so stale on-disk caches are wiped once on upgrade.
+    private static let cacheVersion = 5
+    private static let cacheVersionKey = "artCacheVersion"
     private let dir: URL
 
     init() {
@@ -154,32 +143,49 @@ final class ArtStore {
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
         dir = base.appendingPathComponent("dev.fulltime.skelf/art", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // One-time wipe of art cached under an older source (old paintings → modern/digital art).
+        if UserDefaults.standard.integer(forKey: Self.cacheVersionKey) != Self.cacheVersion {
+            if let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+                for f in files { try? FileManager.default.removeItem(at: f) }
+            }
+            UserDefaults.standard.set(Self.cacheVersion, forKey: Self.cacheVersionKey)
+        }
         if let u = skelfResourceBundle.url(forResource: "art-map", withExtension: "json"),
            let d = try? Data(contentsOf: u),
-           let m = try? JSONDecoder().decode([String: Entry].self, from: d) {
-            map = m
+           let arr = try? JSONDecoder().decode([String].self, from: d) {
+            pool = arr
         }
-        // Seed the dedup set with every image already claimed by the curated map, so a
-        // runtime-resolved skill never reuses a curated painting.
-        for e in map.values { if let iid = Self.aicImageId(e.url) { usedImages.insert(iid) } }
     }
 
-    /// Forget every downloaded painting (memory + disk) so the next view re-fetches it.
-    /// Runtime picks reset too; the curated dedup seed is rebuilt from the bundled map.
+    /// Assign a distinct pool image to each installed skill (stable hash + linear-probe dedup),
+    /// so a library never repeats an image. Call on load and whenever the skill set changes.
+    func updateAssignment(_ ids: [String]) {
+        guard !pool.isEmpty else { return }
+        var used = Set<Int>(); var map: [String: Int] = [:]
+        for id in ids.sorted() {
+            var slot = Self.stableIndex(id, pool.count), tries = 0
+            while used.contains(slot) && tries < pool.count { slot = (slot + 1) % pool.count; tries += 1 }
+            used.insert(slot); map[id] = slot
+        }
+        assignment = map
+    }
+
+    private func poolURL(for id: String) -> String? {
+        guard !pool.isEmpty else { return nil }
+        return pool[assignment[id] ?? Self.stableIndex(id, pool.count)]
+    }
+
+    private static func stableIndex(_ s: String, _ n: Int) -> Int {
+        var h: UInt64 = 5381; for b in s.utf8 { h = (h &* 33) ^ UInt64(b) }
+        return n > 0 ? Int(h % UInt64(n)) : 0
+    }
+
+    /// Forget every downloaded image (memory + disk) so the next view re-fetches it.
     func clearCache() {
         mem.removeAll(); failed.removeAll(); inflight.removeAll(); waiters.removeAll()
-        runtimeAttribution.removeAll(); runtimeWhy.removeAll()
-        usedImages.removeAll()
-        for e in map.values { if let iid = Self.aicImageId(e.url) { usedImages.insert(iid) } }
         if let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
             for f in files { try? FileManager.default.removeItem(at: f) }
         }
-    }
-
-    private static func aicImageId(_ url: String) -> String? {
-        // …/iiif/2/<image_id>/full/…
-        guard let r = url.range(of: "/iiif/2/") else { return nil }
-        return url[r.upperBound...].split(separator: "/").first.map(String.init)
     }
 
     private func diskURL(_ id: String) -> URL {
@@ -195,105 +201,49 @@ final class ArtStore {
         return nil
     }
 
-    func hasArt(_ id: String) -> Bool { map[id] != nil }
-
-    // Painting details for the banner popover (curated map, else a runtime pick).
-    func details(_ id: String) -> Details? {
-        if let e = map[id] {
-            return Details(title: e.title ?? e.by ?? "Untitled", artist: e.artist ?? "Unknown", date: e.date ?? "",
-                           medium: e.medium ?? "", origin: e.origin ?? "", dimensions: e.dimensions ?? "",
-                           description: e.description ?? "", why: e.why ?? "",
-                           license: e.license ?? "Public domain · Art Institute of Chicago")
-        }
-        if let by = runtimeAttribution[id] {
-            let parts = by.components(separatedBy: " — ")
-            return Details(title: parts.first ?? by, artist: parts.count > 1 ? parts[1] : "Unknown", date: "",
-                           medium: "", origin: "", dimensions: "", description: "", why: runtimeWhy[id] ?? "",
-                           license: "Public domain · Art Institute of Chicago")
-        }
-        return nil
-    }
-
-    /// Resolve and download a painting for `skill`; calls back on main with the image (or nil
-    /// if it can't find one / fails — the caller keeps the themed fallback). For a skill in the
-    /// bundled curated map it uses that painting; otherwise it searches the Art Institute live
-    /// so ANY user's skills get a relevant painting with no setup. Call on main.
+    /// Resolve + download the skill's assigned NASA image; calls back on main with the image
+    /// (or nil — caller keeps the generated themed fallback). Call on main.
     func fetch(_ skill: Skill, completion: @escaping (NSImage?) -> Void) {
         guard AppSettings.shared.usePaintings else { completion(nil); return }   // generated art only
         let id = skill.id
         if let i = cached(id) { completion(i); return }
         if failed.contains(id) { completion(nil); return }
+        guard let urlStr = poolURL(for: id) else { completion(nil); return }
         // Queue this card's callback — every card awaiting the same in-flight image is
         // notified when it lands (NSCollectionView recycles cells, so the card that started
         // the download is often gone by the time it finishes).
         waiters[id, default: []].append { completion($0) }
         if inflight.contains(id) { return }
         inflight.insert(id)
-        resolveURL(skill) { [weak self] url in
+        download(Self.sizedURLs(urlStr), 0) { [weak self] img, data in
             guard let self = self else { return }
-            guard let url = url else { self.deliver(id, nil); return }
-            var req = URLRequest(url: url)
-            req.setValue("Skelf/\(skelfShortVersion) (skill art)", forHTTPHeaderField: "User-Agent")
-            // The Art Institute of Chicago's IIIF image server requires this header (else 403).
-            req.setValue("Skelf (https://github.com/devbyshima/Skelf)", forHTTPHeaderField: "AIC-User-Agent")
-            URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-                DispatchQueue.main.async {
-                    guard let self = self else { return }
-                    if let data = data, let img = NSImage(data: data) {
-                        try? data.write(to: self.diskURL(id)); self.mem[id] = img; self.deliver(id, img)
-                    } else { self.deliver(id, nil) }
-                }
-            }.resume()
+            if let img = img, let data = data { try? data.write(to: self.diskURL(id)); self.mem[id] = img }
+            self.inflight.remove(id)
+            let cbs = self.waiters.removeValue(forKey: id) ?? []
+            if let img = img { cbs.forEach { $0(img) } } else { self.failed.insert(id) }
         }
     }
 
-    private func deliver(_ id: String, _ img: NSImage?) {
-        inflight.remove(id)
-        let cbs = waiters.removeValue(forKey: id) ?? []
-        if let img = img { cbs.forEach { $0(img) } } else { failed.insert(id) }
+    // NASA asset sizes: try large → medium → small → orig → the stored URL, so a missing size
+    // still resolves to a real raster image.
+    private static func sizedURLs(_ url: String) -> [String] {
+        guard let tilde = url.range(of: "~", options: .backwards) else { return [url] }
+        let base = String(url[..<tilde.lowerBound])
+        return [base + "~large.jpg", base + "~medium.jpg", base + "~small.jpg", base + "~orig.jpg", url]
     }
 
-    // Curated map for known skills, else a live Art Institute search for this skill's theme.
-    private func resolveURL(_ skill: Skill, _ done: @escaping (URL?) -> Void) {
-        if let entry = map[skill.id], let url = URL(string: entry.url) { done(url); return }
-        runtimeSearch(skill, done)
-    }
-
-    private func runtimeSearch(_ skill: Skill, _ done: @escaping (URL?) -> Void) {
-        var comp = URLComponents(string: "https://api.artic.edu/api/v1/artworks/search")!
-        comp.queryItems = [
-            .init(name: "q", value: artKeyword(for: skill)),
-            .init(name: "query[term][is_public_domain]", value: "true"),
-            .init(name: "fields", value: "image_id,title,artist_title,classification_titles"),
-            .init(name: "limit", value: "40")]
-        guard let url = comp.url else { done(nil); return }
-        var req = URLRequest(url: url)
-        req.setValue("Skelf (https://github.com/devbyshima/Skelf)", forHTTPHeaderField: "AIC-User-Agent")
-        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-            guard let self = self else { return }
-            var pick: (id: String, title: String, artist: String)?
-            if let data = data,
-               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let results = obj["data"] as? [[String: Any]] {
-                func scan(paintingsOnly: Bool) {
-                    for r in results where pick == nil {
-                        guard let iid = r["image_id"] as? String, !iid.isEmpty,
-                              !self.usedImages.contains(iid) else { continue }
-                        let cls = (r["classification_titles"] as? [String])?.map { $0.lowercased() } ?? []
-                        if paintingsOnly && !cls.contains(where: { $0.contains("painting") }) { continue }
-                        pick = (iid, r["title"] as? String ?? "Untitled", r["artist_title"] as? String ?? "Unknown")
-                    }
-                }
-                scan(paintingsOnly: true)
-                if pick == nil { scan(paintingsOnly: false) }   // accept any artwork if no painting
-            }
-            let kw = artKeyword(for: skill)
-            DispatchQueue.main.async {
-                guard let p = pick else { done(nil); return }
-                self.usedImages.insert(p.id)
-                self.runtimeAttribution[skill.id] = "\(p.title) — \(p.artist)"
-                self.runtimeWhy[skill.id] = "Chosen to match this skill — a public-domain artwork on the theme of “\(kw)”."
-                done(URL(string: "https://www.artic.edu/iiif/2/\(p.id)/full/843,/0/default.jpg"))
+    private func download(_ urls: [String], _ i: Int, _ done: @escaping (NSImage?, Data?) -> Void) {
+        guard i < urls.count, let url = URL(string: urls[i]) else { done(nil, nil); return }
+        var req = URLRequest(url: url, timeoutInterval: 20)
+        req.setValue("Skelf/\(skelfShortVersion) (https://github.com/devbyshima/Skelf)", forHTTPHeaderField: "User-Agent")
+        // The completion runs on a background queue — decode there (NASA images can be large;
+        // skip multi-hundred-MB masters) and hop to main only with the finished image.
+        URLSession.shared.dataTask(with: req) { [weak self] data, resp, _ in
+            let ok = (resp as? HTTPURLResponse)?.statusCode == 200
+            if ok, let data = data, data.count < 12_000_000, let img = NSImage(data: data), img.size.width > 1 {
+                DispatchQueue.main.async { done(img, data) }
+            } else {
+                DispatchQueue.main.async { self?.download(urls, i + 1, done) }
             }
         }.resume()
     }
@@ -337,39 +287,3 @@ func artSymbol(for skill: Skill) -> String {
     }
 }
 
-// A paintable MUSEUM-SEARCH subject for a skill — used at runtime to find a relevant
-// public-domain painting for skills NOT in the curated map (so any user's skills get art).
-// Maps the skill's purpose to a concrete painting subject the Art Institute search will hit.
-func artKeyword(for skill: Skill) -> String {
-    let hay = (skill.name + " " + skill.category + " " + skill.description).lowercased()
-    let table: [(String, String)] = [
-        ("animation", "dancers"), ("animate", "dancers"), ("motion", "horses"), ("spring", "fountain"),
-        ("sound", "musicians"), ("audio", "musicians"), ("music", "musicians"),
-        ("icon", "still life"), ("morph", "metamorphosis"),
-        ("test", "still life"), ("tdd", "still life"), ("qa", "inspection"),
-        ("bug", "anatomy"), ("diagnos", "physician"), ("debug", "anatomy"),
-        ("refactor", "scaffold"), ("architect", "architecture"), ("scaffold", "construction"),
-        ("design", "sketch"), ("interface", "facade"), ("prototype", "study"), ("sketch", "drawing"),
-        ("domain", "map"), ("model", "map"), ("language", "manuscript"), ("ubiquitous", "atlas"),
-        ("prd", "manuscript"), ("article", "manuscript"), ("writ", "manuscript"), ("edit", "scribe"),
-        ("issue", "harvest"), ("triage", "physician"), ("handoff", "relay"), ("merge", "bridge"),
-        ("git", "fortress"), ("commit", "fortress"), ("guardrail", "fortress"), ("pre-commit", "gate"),
-        ("review", "scholar"), ("decision", "crossroads"), ("map", "map"), ("plan", "map"),
-        ("teach", "classroom"), ("grill", "interrogation"), ("ask", "conversation"),
-        ("interview", "tribunal"), ("docs", "library"), ("doc", "library"),
-        ("obsidian", "library"), ("vault", "library"), ("market", "market"),
-        ("human", "portrait"), ("caveman", "cave"), ("zoom", "panorama"),
-        ("migrate", "caravan"), ("shoehorn", "harbor"),
-        ("principle", "geometry"), ("fragment", "mosaic"), ("shape", "sculptor"),
-        ("beat", "orchestra"), ("exercise", "gymnasium"), ("implement", "blacksmith"),
-        ("setup", "workshop"), ("config", "workshop"), ("scan", "panorama")
-    ]
-    for (kw, subj) in table where hay.contains(kw) { return subj }
-    // Fall back to the skill's own first name word, else a safe broad subject.
-    let word = skill.name.lowercased().split(whereSeparator: { "-_ ".contains($0) }).first.map(String.init) ?? ""
-    return word.count >= 4 ? word : "landscape"
-}
-
-// A skill/folder "image": a single cached bitmap layer (creator avatar, or a
-// pre-rendered gradient fallback) + a bottom scrim. No live gradients/text layers,
-// so scrolling stays smooth.

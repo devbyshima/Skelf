@@ -162,6 +162,7 @@ final class AppSettings {
         static let menuBarOnly = "menuBarOnly", reduceMotion = "reduceMotion", usePaintings = "usePaintings"
         static let appearance = "appearance", globalHotKey = "globalHotKeyEnabled"
         static let autoCheckUpdates = "autoCheckUpdates"
+        static let aiFeatures = "aiFeaturesEnabled"
     }
 
     private var applyingLogin = false
@@ -204,6 +205,11 @@ final class AppSettings {
     var autoCheckUpdates: Bool {
         didSet { UserDefaults.standard.set(autoCheckUpdates, forKey: Keys.autoCheckUpdates) }
     }
+    /// Use Apple's on-device model (Foundation Models) for natural-language skill search and
+    /// plain-English summaries. Honored only on capable hardware; see SkillFinder.isAvailable.
+    var useAIFeatures: Bool {
+        didSet { UserDefaults.standard.set(useAIFeatures, forKey: Keys.aiFeatures) }
+    }
     static let artChanged = Notification.Name("SkelfArtSettingChanged")
 
     private init() {
@@ -215,6 +221,7 @@ final class AppSettings {
         appearance = AppAppearance(rawValue: UserDefaults.standard.string(forKey: Keys.appearance) ?? "") ?? .system
         globalHotKey = (UserDefaults.standard.object(forKey: Keys.globalHotKey) as? Bool) ?? true
         autoCheckUpdates = (UserDefaults.standard.object(forKey: Keys.autoCheckUpdates) as? Bool) ?? true
+        useAIFeatures = (UserDefaults.standard.object(forKey: Keys.aiFeatures) as? Bool) ?? true
     }
 
     func applyMenuBarOnly() {
