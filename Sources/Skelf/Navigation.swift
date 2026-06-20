@@ -212,19 +212,30 @@ struct SkillDetailScreen: View {
         let favTok = model.favoritesToken
         let fav = model.favorites.isFavorite(skillId)
         DetailRepresentable(model: model, skillId: skillId, token: token, favToken: favTok)
-            .navigationTitle(model.skill(skillId)?.name ?? skillId)
+            .ignoresSafeArea(edges: .top)                    // banner fills under the transparent toolbar
+            .navigationTitle("")
+            .navigationBarBackButtonHidden(true)
+            // The topbar is back, but transparent — its glass buttons are leveled with the traffic
+            // lights and the banner art is the only background.
             .toolbar {
-                ToolbarItem {
-                    Button { if let s = model.skill(skillId) { model.copySkill(s) } } label: {
-                        Label("Copy", systemImage: "doc.on.doc")
+                ToolbarItem(placement: .navigation) {
+                    Button { if !model.path.isEmpty { model.path.removeLast() } } label: {
+                        Image(systemName: "chevron.left")
                     }
+                    .help("Back")
                 }
-                ToolbarItem {
-                    Button { model.favorites.toggle(skillId) } label: {
-                        Label("Favorite", systemImage: fav ? "star.fill" : "star")
+                ToolbarItemGroup {
+                    Button { if let s = model.skill(skillId) { model.copySkill(s) } } label: {
+                        Image(systemName: "doc.on.doc")
                     }
+                    .help("Copy command")
+                    Button { model.favorites.toggle(skillId) } label: {
+                        Image(systemName: fav ? "star.fill" : "star")
+                    }
+                    .help(fav ? "Unfavorite" : "Favorite")
                 }
             }
+            .toolbarBackground(.hidden, for: .windowToolbar)  // transparent — the banner is the only background
     }
 }
 
@@ -263,24 +274,17 @@ struct DetailRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> SkillDetailView {
         let v = SkillDetailView(frame: .zero)
         v.setShowsBackBar(false)
+        v.onBack = { if !model.path.isEmpty { model.path.removeLast() } }
         v.onCopy = { model.copySkill($0) }
-        v.onToggleFavorite = { model.favorites.toggle($0.id) }
-        v.onOrganize = { skill, anchor in
-            let menu = folderPickerMenu(model.folders) { target in
-                model.folders.copySkill(skill.id, to: target); Sound.play(.move)
-            }
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 4), in: anchor)
-        }
         return v
     }
     func updateNSView(_ v: SkillDetailView, context: Context) {
         let c = context.coordinator
-        // full reconfigure (re-renders the SKILL.md) only when the skill or data changes…
+        // full reconfigure (re-renders the SKILL.md) only when the skill or data changes.
         if let s = model.skill(skillId), c.lastSkillId != skillId || c.lastToken != token {
             v.configure(s, isFavorite: model.favorites.isFavorite(skillId))
             c.lastSkillId = skillId; c.lastToken = token
         }
-        v.setFavorite(model.favorites.isFavorite(skillId))   // …favorite-only changes are a light update
     }
 }
 
