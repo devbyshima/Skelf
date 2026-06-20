@@ -6,6 +6,31 @@ All notable changes to Skelf are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-06-21
+
+### Added
+
+- One-click releasing: a **Cut Release** workflow (Actions → Run workflow) bumps the version,
+  promotes the changelog, and pushes the tag — which `release.yml` then builds and publishes.
+
+### Changed
+
+- Skill detail page redesign: **Back, Copy and Favorite** moved into a transparent window
+  toolbar, leveled with the traffic lights, over a taller full-bleed artwork banner.
+- The banner now **ripples** (Metal shader) when a skill opens and when it's clicked; a click
+  ripples, then the artwork popup **bounces in at the window centre**.
+- Buttons animate only on click — a spring-pop that always returns to full size (no hover
+  movement, and they can no longer get stuck shrunk).
+- The on-device **EXPLANATION** (formerly "In Plain English") prewarms and prefetches its
+  Foundation Models summary on card hover so it appears faster, and reads as one flowing
+  sentence ("… — best for …").
+
+### Fixed
+
+- Detail cards now follow light/dark appearance changes instead of keeping their build-time
+  colors.
+- The window background no longer leaks as a strip above the banner.
+
 ## [1.3.0] - 2026-06-20
 
 ### Changed
@@ -78,7 +103,8 @@ All notable changes to Skelf are documented here. The format is based on
 - Restructured from a single source file into focused files under `Sources/Skelf/`, added a
   SwiftPM `Package.swift` (opens in Xcode / `swift build`), CI, SwiftLint, and contributor docs.
 
-[Unreleased]: https://github.com/devbyshima/Skelf/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/devbyshima/Skelf/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.4.0
 [1.3.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.3.0
 [1.2.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.2.0
 [1.1.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.1.0
