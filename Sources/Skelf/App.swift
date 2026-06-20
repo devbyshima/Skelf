@@ -378,10 +378,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             let defaultSize = NSSize(width: 1200, height: 716)   // first-launch default; tuned so the
                                                                   // SKILL.md card and the sidebar line up
             let w = NSWindow(contentRect: NSRect(origin: .zero, size: defaultSize),
-                             styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                              backing: .buffered, defer: false)
             w.contentViewController = host
             w.title = "Skelf"
+            // The skill page owns its whole header: let content draw under the title bar so the
+            // traffic lights float over the banner art, and never show the window title text.
+            w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
             w.minSize = NSSize(width: 680, height: 460)
             w.contentMinSize = NSSize(width: 680, height: 460)   // also floor the content size
             w.setContentSize(defaultSize)
