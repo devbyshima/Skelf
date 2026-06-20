@@ -1,6 +1,7 @@
 // The artwork popup, in SwiftUI: a small, fixed-footprint card that shows a skill's image at
 // its own aspect ratio inside a thin Liquid-Glass frame, with a Metal ripple shader that
-// radiates on appear and on EVERY click. Hosted in a floating glass panel by Detail.swift.
+// radiates on EVERY click (the banner already rippled on the click that opened this). Hosted
+// in a floating glass panel by Detail.swift.
 //
 // The ripple is driven by an explicit start `Date` + a TimelineView, NOT keyframeAnimator:
 // every tap just stamps a new start time and origin, so it restarts reliably under rapid
@@ -44,14 +45,12 @@ struct ArtworkPopupView: View {
         )
         .contentShape(.rect(cornerRadius: 12))
         .onTapGesture { location in startRipple(at: location) }
-        .scaleEffect(shown ? 1 : 0.9)
-        .opacity(shown ? 1 : 0)
+        .opacity(shown ? 1 : 0)                 // scale/bounce is the panel's job (animateOpen)
         .padding(5)                            // a thin Liquid-Glass frame shows through this inset
         .onAppear {
             withAnimation(.spring(response: 0.38, dampingFraction: 0.72)) { shown = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
-                startRipple(at: CGPoint(x: imageSize.width / 2, y: imageSize.height / 2))
-            }
+            // No ripple on open — the banner already rippled on the click that opened this.
+            // The click ripple below stays.
         }
     }
 

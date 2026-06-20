@@ -52,11 +52,12 @@ final class PaintingPanel: NSPanel {
         scaleLayer = layer
         alphaValue = 0
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.22
+            ctx.duration = 0.18
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             animator().alphaValue = 1
         }
-        springPop(layer, from: 0.92, damping: 14, stiffness: 240)
+        // A clear bounce-in: pop up from 0.7 with an underdamped spring (overshoots, then settles).
+        springPop(layer, from: 0.7, damping: 9, stiffness: 240)
     }
 
     override func cancelOperation(_ sender: Any?) { close() }     // Escape
