@@ -18,7 +18,7 @@ final class SkillDetailView: NSView {
     private let topDivider = NSBox()
     private var backBarHeight: NSLayoutConstraint!
 
-    private let banner = SkillArtView()
+    private let banner = RippleBannerView()
     private let bannerName = NSTextField(labelWithString: "")
     private let bannerPillBox = NSView()
     private let bannerPillLabel = NSTextField(labelWithString: "")
@@ -64,7 +64,7 @@ final class SkillDetailView: NSView {
         banner.translatesAutoresizingMaskIntoConstraints = false
         addSubview(banner)
         banner.toolTip = "Click to view the full image"
-        banner.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(bannerClicked)))
+        banner.onClick = { [weak self] in self?.bannerClicked() }   // ripple plays first (in the banner)
         bannerName.font = .systemFont(ofSize: 28, weight: .bold)   // the page title — clearly largest
         bannerName.textColor = .white
         bannerName.lineBreakMode = .byTruncatingTail
@@ -366,6 +366,10 @@ final class SkillDetailView: NSView {
                 self.banner.setAvatar(img)
             }
         }
+        // Ripple the banner when a skill is opened (after the art is in place).
+        if isNewSkill {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in self?.banner.ripple() }
+        }
         bannerName.stringValue = skill.name
         bannerPillLabel.stringValue = skill.initiator
         bannerStatus.stringValue = skill.enabled ? "● Enabled" : "○ Installed · off"
@@ -444,7 +448,12 @@ final class SkillDetailView: NSView {
     // Clicking the banner → a small, FIXED-footprint floating Liquid-Glass panel that frames the
     // image at its own aspect ratio (SwiftUI `ArtworkPopupView`, with a Metal ripple shader).
     private var paintingPanel: NSPanel?
-    @objc private func bannerClicked() {
+    private func bannerClicked() {
+        // The banner ripple was just kicked off by the tap; let it play, then a ~½s beat, then open.
+        let delay = AppSettings.shared.reduceMotion ? 0.0 : 1.12
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.openPainting() }
+    }
+    private func openPainting() {
         guard let skill = skill else { return }
         let img = ArtStore.shared.cached(skill.id) ?? Self.fallbackImage(skill)
         // Fixed footprint: the image's LONGEST side is `maxSide`, ratio preserved (capped to screen).
@@ -493,7 +502,11 @@ final class SkillDetailView: NSView {
         panel.isMovableByWindowBackground = true
         panel.isReleasedWhenClosed = false
         panel.contentView = container
-        panel.centerInScreen(self.window?.screen)
+        if let wf = self.window?.frame {
+            panel.setFrameOrigin(NSPoint(x: (wf.midX - pw / 2).rounded(), y: (wf.midY - ph / 2).rounded()))
+        } else {
+            panel.centerInScreen(self.window?.screen)   // fall back to screen-center if windowless
+        }
         panel.level = .floating
         panel.makeKeyAndOrderFront(nil)
         panel.animateOpen(scaling: glass.layer)
