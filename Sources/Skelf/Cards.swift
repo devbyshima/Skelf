@@ -257,23 +257,18 @@ final class CardRootView: NSView {
 // release (Disney active-state / squash; ~140ms ease-out, honors Reduce Motion). Used wherever
 // a button should feel pressable — card controls, the Copy button, the detail sidebar.
 final class AnimatedButton: NSButton {
-    // The view to scale on press — defaults to self, but glass controls set this to the visible
+    // The view to scale on click — defaults to self, but glass controls set this to the visible
     // glass circle (scaling the button *inside* the glass doesn't show through the effect).
     weak var pressScaleTarget: NSView?
     override init(frame frameRect: NSRect) { super.init(frame: frameRect); wantsLayer = true }
     required init?(coder: NSCoder) { fatalError() }
-    override var isHighlighted: Bool {
-        didSet {
-            guard isHighlighted != oldValue, !AppSettings.shared.reduceMotion else { return }
-            let target = pressScaleTarget ?? self
-            guard let l = target.layer, l.bounds.width > 1 else { return }
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.09                       // snappy — immediate, responsive feedback
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                ctx.allowsImplicitAnimation = true
-                l.transform = isHighlighted ? centerScale(l, 0.9) : CATransform3DIdentity
-            }
-        }
+    // Click feedback: a momentary spring-pop (squash to 0.9, overshoot back to rest), driven by the
+    // *action* — not a held press. springPop only animates the presentation and never touches the
+    // model transform, so the button always returns to full size, even when the click opens a modal
+    // menu that eats the mouse-up (which previously left the held scale stuck shrunk).
+    override func sendAction(_ action: Selector?, to target: Any?) -> Bool {
+        springPop((pressScaleTarget ?? self).layer, from: 0.9)
+        return super.sendAction(action, to: target)
     }
 }
 
@@ -389,7 +384,7 @@ final class SkillGridItem: NSCollectionViewItem {
         copyButton.bezelStyle = .regularSquare
         copyButton.target = self
         copyButton.action = #selector(copyClicked)
-        copyButton.translatesAutoresizingMaskIntoConstraints = false
+        copyButton.translatesAutoresizingMaskIntoConstraints = false   // hover/press/spring-back come from AnimatedButton defaults
         setCopyTitle("Copy")
         root.addSubview(copyButton)
 
@@ -473,7 +468,7 @@ final class SkillGridItem: NSCollectionViewItem {
     @objc private func menuClicked() { onMenu?(menuCircle) }
     @objc private func copyClicked() {
         onCopy?()
-        springPop(copyButton.layer, from: 0.9)
+        // The click pop (squash + spring back) is handled by AnimatedButton.sendAction.
         setCopyTitle("Copied ✓")
         // A brief green wash confirms the copy, then settles back to white.
         if !AppSettings.shared.reduceMotion, let l = copyButton.layer {
@@ -518,7 +513,16 @@ final class SkillGridItem: NSCollectionViewItem {
     }
     override func mouseEntered(with event: NSEvent) {
         hovering = true; applyHover()
-        if let s = skill { SkillHoverTip.shared.schedule(for: s, at: NSEvent.mouseLocation, on: view.window?.screen) }
+        if let s = skill {
+            SkillHoverTip.shared.schedule(for: s, at: NSEvent.mouseLocation, on: view.window?.screen)
+            // Warm the on-device model while browsing, and pre-generate this skill's explanation if
+            // the pointer dwells — so opening the card shows it instantly instead of cold-starting.
+            SkillFinder.shared.prewarm()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+                guard let self = self, self.hovering, self.skill?.id == s.id else { return }
+                Task { _ = await SkillFinder.shared.summary(for: s) }
+            }
+        }
     }
     override func mouseMoved(with event: NSEvent) { SkillHoverTip.shared.update(cursor: NSEvent.mouseLocation) }
     override func mouseExited(with event: NSEvent) { hovering = false; applyHover(); SkillHoverTip.shared.cancel() }
@@ -526,8 +530,11 @@ final class SkillGridItem: NSCollectionViewItem {
         guard let l = view.layer else { return }
         l.zPosition = hovering ? 1 : 0
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.2
-            ctx.timingFunction = CAMediaTimingFunction(name: hovering ? .easeOut : .easeInEaseOut)
+            let springBack = !hovering && !AppSettings.shared.reduceMotion   // settle with a gentle overshoot on hover-out
+            ctx.duration = springBack ? 0.3 : 0.2
+            ctx.timingFunction = springBack
+                ? CAMediaTimingFunction(controlPoints: 0.34, 1.56, 0.64, 1)
+                : CAMediaTimingFunction(name: hovering ? .easeOut : .easeInEaseOut)
             ctx.allowsImplicitAnimation = true
             l.transform = hovering ? centerScale(l, 1.05) : CATransform3DIdentity
             l.shadowOpacity = hovering ? 0.5 : 0.0
@@ -674,8 +681,11 @@ final class FolderGridItem: NSCollectionViewItem {
         guard let l = view.layer else { return }
         l.zPosition = hovering ? 1 : 0
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.2
-            ctx.timingFunction = CAMediaTimingFunction(name: hovering ? .easeOut : .easeInEaseOut)
+            let springBack = !hovering && !AppSettings.shared.reduceMotion   // settle with a gentle overshoot on hover-out
+            ctx.duration = springBack ? 0.3 : 0.2
+            ctx.timingFunction = springBack
+                ? CAMediaTimingFunction(controlPoints: 0.34, 1.56, 0.64, 1)
+                : CAMediaTimingFunction(name: hovering ? .easeOut : .easeInEaseOut)
             ctx.allowsImplicitAnimation = true
             l.transform = hovering ? centerScale(l, 1.05) : CATransform3DIdentity
             l.shadowOpacity = hovering ? 0.5 : 0.0

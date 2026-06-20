@@ -11,8 +11,6 @@ import Carbon.HIToolbox
 final class SkillDetailView: NSView {
     var onBack: (() -> Void)?
     var onCopy: ((Skill) -> Void)?
-    var onToggleFavorite: ((Skill) -> Void)?
-    var onOrganize: ((Skill, NSView) -> Void)?
     private var skill: Skill?
     private var artToken = 0
 
@@ -20,7 +18,7 @@ final class SkillDetailView: NSView {
     private let topDivider = NSBox()
     private var backBarHeight: NSLayoutConstraint!
 
-    private let banner = SkillArtView()
+    private let banner = RippleBannerView()
     private let bannerName = NSTextField(labelWithString: "")
     private let bannerPillBox = NSView()
     private let bannerPillLabel = NSTextField(labelWithString: "")
@@ -66,7 +64,7 @@ final class SkillDetailView: NSView {
         banner.translatesAutoresizingMaskIntoConstraints = false
         addSubview(banner)
         banner.toolTip = "Click to view the full image"
-        banner.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(bannerClicked)))
+        banner.onClick = { [weak self] in self?.bannerClicked() }   // ripple plays first (in the banner)
         bannerName.font = .systemFont(ofSize: 28, weight: .bold)   // the page title — clearly largest
         bannerName.textColor = .white
         bannerName.lineBreakMode = .byTruncatingTail
@@ -112,14 +110,14 @@ final class SkillDetailView: NSView {
         // take. Hidden until a summary arrives (and stays hidden when AI is unavailable).
         aiSummaryBox.wantsLayer = true
         aiSummaryBox.layer?.cornerRadius = 10
-        aiSummaryBox.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor
+        reactiveBackground(aiSummaryBox) { NSColor.controlAccentColor.withAlphaComponent(0.10) }
         aiSummaryBox.translatesAutoresizingMaskIntoConstraints = false
         aiSummaryBox.isHidden = true
-        let aiHdr = NSTextField(labelWithString: "IN PLAIN ENGLISH")
+        let aiHdr = NSTextField(labelWithString: "EXPLANATION")
         aiHdr.font = .systemFont(ofSize: 10, weight: .semibold); aiHdr.textColor = .controlAccentColor
         aiHdr.translatesAutoresizingMaskIntoConstraints = false
         aiSummaryLabel.font = .systemFont(ofSize: 13.5)
-        aiSummaryLabel.textColor = NSColor.labelColor.withAlphaComponent(0.95)
+        reactiveTextColor(aiSummaryLabel) { NSColor.labelColor.withAlphaComponent(0.95) }
         aiSummaryLabel.translatesAutoresizingMaskIntoConstraints = false
         let aiStack = NSStackView(views: [aiHdr, aiSummaryLabel])
         aiStack.orientation = .vertical; aiStack.alignment = .leading; aiStack.spacing = 5
@@ -144,14 +142,14 @@ final class SkillDetailView: NSView {
         readmeCard.wantsLayer = true
         readmeCard.layer?.cornerRadius = 8
         readmeCard.layer?.borderWidth = 1
-        readmeCard.layer?.borderColor = NSColor.separatorColor.cgColor
-        readmeCard.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+        reactiveBorder(readmeCard) { .separatorColor }
+        reactiveBackground(readmeCard) { .textBackgroundColor }
         readmeCard.layer?.masksToBounds = true
         readmeCard.translatesAutoresizingMaskIntoConstraints = false
         leftBox.addSubview(readmeCard)
         let hdr = NSView()
         hdr.wantsLayer = true
-        hdr.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        reactiveBackground(hdr) { .windowBackgroundColor }
         hdr.translatesAutoresizingMaskIntoConstraints = false
         let hdrIcon = NSImageView()
         hdrIcon.image = NSImage(systemSymbolName: "book.closed", accessibilityDescription: nil)
@@ -252,10 +250,10 @@ final class SkillDetailView: NSView {
             topDivider.leadingAnchor.constraint(equalTo: leadingAnchor),
             topDivider.trailingAnchor.constraint(equalTo: trailingAnchor),
 
-            banner.topAnchor.constraint(equalTo: topDivider.bottomAnchor),
+            banner.topAnchor.constraint(equalTo: topAnchor),   // fill to the very top (the back bar is never shown)
             banner.leadingAnchor.constraint(equalTo: leadingAnchor),
             banner.trailingAnchor.constraint(equalTo: trailingAnchor),
-            banner.heightAnchor.constraint(equalToConstant: 150),
+            banner.heightAnchor.constraint(equalToConstant: 230),
             bannerName.leadingAnchor.constraint(equalTo: banner.leadingAnchor, constant: 24),
             bannerName.bottomAnchor.constraint(equalTo: banner.bottomAnchor, constant: -18),
             bannerName.trailingAnchor.constraint(lessThanOrEqualTo: bannerPillBox.leadingAnchor, constant: -10),
@@ -293,12 +291,34 @@ final class SkillDetailView: NSView {
         ])
     }
 
+    // CALayer colors are fixed CGColors that don't follow appearance changes, and
+    // `withAlphaComponent` drops a dynamic NSColor's appearance-awareness — so re-resolve both
+    // whenever the effective appearance flips (light ↔ dark).
+    private var dynamicColorUpdates: [() -> Void] = []
+    private func reactiveBackground(_ view: NSView, _ provider: @escaping () -> NSColor) {
+        view.wantsLayer = true
+        let apply: () -> Void = { [weak view] in view?.layer?.backgroundColor = provider().cgColor }
+        apply(); dynamicColorUpdates.append(apply)
+    }
+    private func reactiveBorder(_ view: NSView, _ provider: @escaping () -> NSColor) {
+        let apply: () -> Void = { [weak view] in view?.layer?.borderColor = provider().cgColor }
+        apply(); dynamicColorUpdates.append(apply)
+    }
+    private func reactiveTextColor(_ field: NSTextField, _ provider: @escaping () -> NSColor) {
+        let apply: () -> Void = { [weak field] in field?.textColor = provider() }
+        apply(); dynamicColorUpdates.append(apply)
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        effectiveAppearance.performAsCurrentDrawingAppearance { dynamicColorUpdates.forEach { $0() } }
+    }
+
     private func card(_ title: String?, _ content: NSView) -> NSView {
         let c = NSView()
         c.wantsLayer = true
         c.layer?.cornerRadius = 12; c.layer?.borderWidth = 1
-        c.layer?.borderColor = NSColor.separatorColor.cgColor
-        c.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        reactiveBorder(c) { .separatorColor }
+        reactiveBackground(c) { .controlBackgroundColor }
         c.translatesAutoresizingMaskIntoConstraints = false
         let stack = NSStackView()
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
@@ -337,7 +357,12 @@ final class SkillDetailView: NSView {
     }
 
     private func sidebarButton(_ title: String, _ symbol: String, _ action: Selector, prominent: Bool = false) -> NSButton {
-        let b = AnimatedButton(title: " " + title, target: self, action: action)
+        // Same tactile feel as the cards' Copy button: hover pop, snappy press, spring-back on
+        // release. centerScale scales around the centre so the rounded bezel doesn't drift.
+        let b = AnimatedButton(frame: .zero)
+        b.title = " " + title
+        b.target = self
+        b.action = action
         b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
         b.imagePosition = .imageLeading
         b.bezelStyle = .rounded
@@ -363,6 +388,10 @@ final class SkillDetailView: NSView {
                 self.banner.setAvatar(img)
             }
         }
+        // Ripple the banner when a skill is opened (after the art is in place).
+        if isNewSkill {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in self?.banner.ripple() }
+        }
         bannerName.stringValue = skill.name
         bannerPillLabel.stringValue = skill.initiator
         bannerStatus.stringValue = skill.enabled ? "● Enabled" : "○ Installed · off"
@@ -382,7 +411,7 @@ final class SkillDetailView: NSView {
             Task { @MainActor [weak self] in
                 guard let summary = await SkillFinder.shared.summary(for: skill) else { return }
                 guard let self = self, self.skill?.id == sid else { return }   // still showing this skill
-                self.aiSummaryLabel.stringValue = summary.whatItDoes + " " + summary.whenToUse
+                self.aiSummaryLabel.stringValue = Self.composedExplanation(summary)
                 self.aiSummaryBox.isHidden = false
             }
         }
@@ -441,7 +470,12 @@ final class SkillDetailView: NSView {
     // Clicking the banner → a small, FIXED-footprint floating Liquid-Glass panel that frames the
     // image at its own aspect ratio (SwiftUI `ArtworkPopupView`, with a Metal ripple shader).
     private var paintingPanel: NSPanel?
-    @objc private func bannerClicked() {
+    private func bannerClicked() {
+        // The banner ripple was just kicked off by the tap; let it play, then a ~½s beat, then open.
+        let delay = AppSettings.shared.reduceMotion ? 0.0 : 1.12
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.openPainting() }
+    }
+    private func openPainting() {
         guard let skill = skill else { return }
         let img = ArtStore.shared.cached(skill.id) ?? Self.fallbackImage(skill)
         // Fixed footprint: the image's LONGEST side is `maxSide`, ratio preserved (capped to screen).
@@ -490,11 +524,27 @@ final class SkillDetailView: NSView {
         panel.isMovableByWindowBackground = true
         panel.isReleasedWhenClosed = false
         panel.contentView = container
-        panel.centerInScreen(self.window?.screen)
+        if let wf = self.window?.frame {
+            panel.setFrameOrigin(NSPoint(x: (wf.midX - pw / 2).rounded(), y: (wf.midY - ph / 2).rounded()))
+        } else {
+            panel.centerInScreen(self.window?.screen)   // fall back to screen-center if windowless
+        }
         panel.level = .floating
         panel.makeKeyAndOrderFront(nil)
         panel.animateOpen(scaling: glass.layer)
         paintingPanel = panel
+    }
+
+    // "<what it does> — best for <use case>." — one flowing sentence rather than a tacked-on
+    // "When you need to…" clause.
+    private static func composedExplanation(_ s: SkillFinder.SkillSummary) -> String {
+        var what = s.whatItDoes.trimmingCharacters(in: .whitespacesAndNewlines)
+        while what.hasSuffix(".") { what.removeLast() }
+        var when = s.whenToUse.trimmingCharacters(in: .whitespacesAndNewlines)
+        while when.hasSuffix(".") { when.removeLast() }
+        if when.lowercased().hasPrefix("when ") { when.removeFirst(5) }   // model may still lead with "When"
+        if let f = when.first { when = f.lowercased() + when.dropFirst() }
+        return when.isEmpty ? what + "." : "\(what) — best for \(when)."
     }
 
     // A themed gradient stand-in when a skill's space image hasn't been cached yet.
@@ -551,6 +601,7 @@ final class SkillDetailView: NSView {
         slug.lineBreakMode = .byTruncatingMiddle
         slug.translatesAutoresizingMaskIntoConstraints = false
         let copyBtn = sidebarButton("Copy command", "doc.on.clipboard", #selector(copySlashTapped), prominent: true)
+        copyCmdButtonRef = copyBtn
         let cmdStack = NSStackView(views: [slug, copyBtn])
         cmdStack.orientation = .vertical; cmdStack.alignment = .leading; cmdStack.spacing = 9
         cmdStack.translatesAutoresizingMaskIntoConstraints = false
@@ -568,26 +619,10 @@ final class SkillDetailView: NSView {
         meta.addArrangedSubview(metaRow("Files", "\(skill.fileCount)"))
         meta.addArrangedSubview(metaRow("Installed", skill.installedAt))
         addCard(card("Details", meta))
-
-        // Actions
-        let favBtn = sidebarButton(isFavorite ? "Favorited" : "Favorite", isFavorite ? "star.fill" : "star", #selector(favoriteTapped))
-        favBtn.contentTintColor = isFavorite ? .systemYellow : nil
-        favButtonRef = favBtn
-        let folderBtn = sidebarButton("Add to Folder…", "folder.badge.plus", #selector(organizeTapped))
-        let actStack = NSStackView(views: [favBtn, folderBtn])
-        actStack.orientation = .vertical; actStack.alignment = .leading; actStack.spacing = 8
-        actStack.translatesAutoresizingMaskIntoConstraints = false
-        addCard(card(nil, actStack))
-        for b in [favBtn, folderBtn] { b.widthAnchor.constraint(equalTo: actStack.widthAnchor).isActive = true }
     }
 
-    private weak var favButtonRef: NSButton?
-    /// Light favorite-state update (no full reconfigure) for the sidebar button.
-    func setFavorite(_ on: Bool) {
-        favButtonRef?.title = on ? " Favorited" : " Favorite"
-        favButtonRef?.image = NSImage(systemSymbolName: on ? "star.fill" : "star", accessibilityDescription: nil)
-        favButtonRef?.contentTintColor = on ? .systemYellow : nil
-    }
+    private weak var copyCmdButtonRef: NSButton?
+    private var copyRevertToken = 0
 
     private func addCard(_ c: NSView) {
         sidebarStack.addArrangedSubview(c)
@@ -595,9 +630,22 @@ final class SkillDetailView: NSView {
     }
 
     @objc private func backTapped() { onBack?() }
-    @objc private func favoriteTapped() { if let s = skill { onToggleFavorite?(s) } }
-    @objc private func organizeTapped() { if let s = skill { onOrganize?(s, sidebarStack) } }
-    @objc private func copySlashTapped() { if let s = skill { onCopy?(s) } }
+    @objc private func copySlashTapped() {
+        guard let s = skill else { return }
+        onCopy?(s)
+        flashCopied()
+    }
+    // Briefly confirm the copy on the "Copy command" button, then settle back (mirrors the card's Copy).
+    private func flashCopied() {
+        guard let b = copyCmdButtonRef else { return }
+        b.title = " Copied ✓"
+        copyRevertToken += 1
+        let tok = copyRevertToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self, weak b] in
+            guard let self = self, self.copyRevertToken == tok else { return }
+            b?.title = " Copy command"
+        }
+    }
     @objc private func githubTapped() {
         guard let url = skill?.skillGithubURL else { return }
         NSWorkspace.shared.open(url)
