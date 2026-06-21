@@ -227,6 +227,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     var onOpenApp: (() -> Void)?
     var onRefresh: (() -> Void)?
     var onSettings: (() -> Void)?
+    var onQuit: (() -> Void)?
     var onUndo: (() -> Void)?
 
     private var currentId: String
@@ -732,12 +733,16 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         let about = NSMenuItem(title: "About Skelf", action: #selector(aboutTapped), keyEquivalent: "")
         about.target = self; menu.addItem(about)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Skelf", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        // "Quit Completely" is the one place that fully exits and removes the menu-bar icon —
+        // ⌘Q and closing the window only tuck Skelf back into the menu bar.
+        let quit = NSMenuItem(title: "Quit Completely", action: #selector(quitTapped), keyEquivalent: "")
+        quit.target = self; menu.addItem(quit)
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: optionsButton.bounds.height + 4), in: optionsButton)
     }
 
     @objc private func refreshTapped() { onRefresh?() }
     @objc private func settingsTapped() { onSettings?() }
+    @objc private func quitTapped() { onQuit?() }
 
     @objc private func toggleSounds() { Sound.setEnabled(!Sound.enabled); AppSettings.shared.playSounds = Sound.enabled }
 
