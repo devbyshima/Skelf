@@ -1,17 +1,12 @@
 name: Cut Release
 
-# One-click releasing. Run this (Actions → Cut Release → Run workflow), pick the bump, and it:
-#   1. bumps SKELF_VERSION + SKELF_BUILD in build.sh,
-#   2. renames the CHANGELOG's "## [Unreleased]" section to the new version (its accumulated
-#      notes move with it) and leaves a fresh empty "## [Unreleased]",
-#   3. commits to main and pushes an annotated `vX.Y.Z` tag —
-# which fires release.yml to build Skelf.app, package the DMG, and publish the GitHub Release.
+# One-click releasing, PR-based. Run this (Actions → Cut Release → Run workflow), pick the bump,
+# and it opens a "Release X.Y.Z" PR that bumps build.sh and promotes the CHANGELOG's
+# "## [Unreleased]" section. MERGING that PR fires release.yml, which tags vX.Y.Z and builds &
+# publishes the GitHub Release. Nothing is pushed straight to main — review happens in the PR.
 #
-# So the normal flow is: land changes, accumulating notes under "## [Unreleased]" in
-# CHANGELOG.md, then run this when you want to ship. No manual version edits or tagging.
-#
-# NOTE: this pushes the version-bump commit straight to `main`. If `main` is protected, allow
-# this workflow (or the github-actions bot) to bypass the rule, or it can't push the commit.
+# Normal flow: land changes (accumulating notes under "## [Unreleased]" in CHANGELOG.md), run
+# this when you want to ship, review the PR, merge it.
 
 on:
   workflow_dispatch:
@@ -24,14 +19,15 @@ on:
         default: minor
 
 permissions:
-  contents: write   # push the commit + tag
+  contents: write        # push the release branch
+  pull-requests: write   # open the PR
 
-concurrency: cut-release   # never cut two releases at once
+concurrency: cut-release   # never prep two releases at once
 
 jobs:
   cut:
-    name: Bump, tag & trigger release
-    runs-on: ubuntu-latest   # pure shell/git — the macOS build runs in release.yml on the tag
+    name: Open a release PR
+    runs-on: ubuntu-latest   # pure shell/git — the macOS build runs in release.yml on merge
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,14 +73,19 @@ jobs:
           # Footer links: repoint Unreleased at the new tag and add the new release link.
           sed -i -E "s#^\[Unreleased\]:.*#[Unreleased]: $REPO/compare/v$NEXT...HEAD\n[$NEXT]: $REPO/releases/tag/v$NEXT#" CHANGELOG.md
 
-      - name: Commit, tag & push
+      - name: Open the release PR
         env:
           NEXT: ${{ steps.v.outputs.next }}
+          BUILD: ${{ steps.v.outputs.build }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          branch="release-v$NEXT"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
           git commit -am "Release $NEXT"
-          git tag -a "v$NEXT" -m "Skelf $NEXT"
-          git push origin main "refs/tags/v$NEXT"
-          echo "Pushed v$NEXT — release.yml will build & publish it." >> "$GITHUB_STEP_SUMMARY"
+          git push -u origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "Release $NEXT" \
+            --body "Automated release prep for **$NEXT** (build $BUILD). Merging this PR tags \`v$NEXT\` and publishes the GitHub Release (handled by release.yml on merge)."
