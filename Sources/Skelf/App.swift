@@ -37,6 +37,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     var popoverController: PopoverListController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Was Skelf auto-started at login (a registered login item) rather than opened by the
+        // user? Read it now, before our own Apple events fire. Used below to keep a login launch
+        // quiet — just the menu-bar icon — when Menu-Bar-Only is on.
+        let launchedAtLogin = Self.launchedAsLoginItem()
         AppSettings.shared.applyOnLaunch()    // restore Menu-Bar-Only (Dock icon) before the UI shows
         store.reload()
         ArtStore.shared.updateAssignment(store.skills.map { $0.id })   // assign a distinct NASA image per skill
@@ -64,7 +68,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         // The system-wide ⌥⌘S hot-key toggles the popover (registers only if the user left it on).
         GlobalHotKey.shared.onFire = { [weak self] in self?.togglePopover(nil) }
         AppSettings.shared.applyHotKey()
-        showWindow()
+        // A login launch in Menu-Bar-Only mode stays as just the menu-bar icon — no window. Any
+        // other launch (manual open, or not Menu-Bar-Only) opens the window as before.
+        dlog("launch: loginItem=\(launchedAtLogin) menuBarOnly=\(AppSettings.shared.menuBarOnly)")
+        if !(launchedAtLogin && AppSettings.shared.menuBarOnly) { showWindow() }
         startWatching()
         // Auto-update: a quick check shortly after launch, then periodically (each call
         // self-throttles to ~once a day and honors the Settings toggle).
@@ -86,6 +93,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showWindow(); return true
     }
+
+    /// True when macOS auto-launched Skelf at login (as a registered login item) rather than the
+    /// user opening it — read from the Open-Application Apple event's login-item flag. (The
+    /// FourCharCodes 'aevt'/'oapp'/'prdt'/'lgit' aren't all surfaced to Swift, so they're spelled out.)
+    private static func launchedAsLoginItem() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              event.eventClass == AEEventClass(kCoreEventClass),
+              event.eventID == AEEventID(kAEOpenApplication) else {
+            return false
+        }
+        return event.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?
+            .enumCodeValue == OSType(keyAELaunchedAsLogInItem)
+    }
+
+    /// ⌘Q / "Quit Skelf". In Menu-Bar-Only mode this tucks Skelf back into the menu bar (the
+    /// status item keeps running); in the regular windowed mode it quits completely, like any
+    /// app. "Quit Completely" always exits, in either mode.
+    @objc private func quitToMenuBar() {
+        guard AppSettings.shared.menuBarOnly else { NSApp.terminate(nil); return }
+        settingsWindow?.orderOut(nil)
+        window?.close()                 // isReleasedWhenClosed = false, so this just hides it
+        NSApp.hide(nil)                 // yield focus back to the previous app
+    }
+
+    /// Fully terminate Skelf, removing the menu-bar icon. Wired to "Quit Completely".
+    @objc func quitCompletely() { NSApp.terminate(nil) }
 
     // Route the Edit ▸ Undo/Redo (and Cmd-Z) to the folder tree's undo manager.
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { undoManager }
@@ -110,7 +143,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         hideOthers.keyEquivalentModifierMask = [.command, .option]
         appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Quit Skelf", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        // ⌘Q quits completely in the regular windowed mode; in Menu-Bar-Only mode it tucks Skelf
+        // into the menu bar. "Quit Completely" (⌥⌘Q, also in the menu-bar ⋯ menu) always exits.
+        appMenu.addItem(withTitle: "Quit Skelf", action: #selector(quitToMenuBar), keyEquivalent: "q").target = self
+        let quitAll = appMenu.addItem(withTitle: "Quit Completely", action: #selector(quitCompletely), keyEquivalent: "q")
+        quitAll.keyEquivalentModifierMask = [.command, .option]
+        quitAll.target = self
 
         let fileItem = NSMenuItem()
         main.addItem(fileItem)
@@ -167,13 +205,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 
     @objc func openSettings() {
         if settingsWindow == nil {
-            let host = NSHostingController(rootView: SettingsView(settings: AppSettings.shared))
-            host.view.layoutSubtreeIfNeeded()             // resolve the SwiftUI size now…
-            let w = NSWindow(contentViewController: host)
+            // Classic toolbar-tab preferences (icon + label tabs up top, like Finder Settings).
+            // NSTabViewController installs the window toolbar and resizes the window per tab.
+            let tc = SettingsTabController(settings: AppSettings.shared)
+            let w = NSWindow(contentViewController: tc)
             w.title = "Skelf Settings"
-            w.styleMask = [.titled, .closable]            // standard, non-resizable Settings window
+            w.styleMask = [.titled, .closable]            // non-resizable preferences window
+            w.toolbarStyle = .preference                  // centered icon+label tabs
             w.isReleasedWhenClosed = false
-            w.setContentSize(host.view.fittingSize)       // …so centering uses the real frame, not a stale one
             settingsWindow = w
         }
         // True-center on the screen showing the main window when it (re)opens — but don't
@@ -344,6 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             }
             ctrl.onRefresh = { [weak self] in self?.reloadFromDisk(auto: false) }
             ctrl.onSettings = { [weak self] in self?.popover.performClose(nil); self?.openSettings() }
+            ctrl.onQuit = { [weak self] in self?.quitCompletely() }
             ctrl.onUndo = { [weak self] in self?.undoManager.undo() }
             popoverController = ctrl
         }

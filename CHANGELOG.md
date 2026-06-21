@@ -6,6 +6,18 @@ All notable changes to Skelf are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- In **Menu Bar Only** mode, **⌘Q** (and closing the window) tucks Skelf back into the menu bar
+  instead of quitting, so the icon keeps running; in the regular windowed mode ⌘Q quits as usual.
+  **Quit Completely** — in the menu-bar ⋯ menu and the app menu (⌥⌘Q) — always fully exits and
+  removes the icon.
+- With **Menu Bar Only** on, launching at login now opens just the menu-bar icon — the main
+  window no longer pops up. Opening Skelf yourself still shows the window.
+- The **Settings** window is rebuilt as classic macOS preferences — native toolbar tabs
+  (General, Appearance, Intelligence, Updates) with native checkbox controls — instead of one
+  long scrolling list.
+
 ## [1.4.0] - 2026-06-21
 
 ### Added
