@@ -13,6 +13,11 @@ All notable changes to Skelf are documented here. The format is based on
 - Empty states in the main window — a search with no matches, an empty Favorites or folder, and a
   fresh install with no skills yet now show a clear message and guidance instead of a blank grid.
 
+### Fixed
+
+- The window's **New Folder** and **Settings** toolbar buttons no longer occasionally render on
+  the wrong side (by the traffic lights) with a flicker — they're pinned to the trailing edge.
+
 ## [1.5.1] - 2026-06-24
 
 ### Fixed
