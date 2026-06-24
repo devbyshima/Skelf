@@ -14,6 +14,7 @@ let package = Package(
             resources: [
                 .process("Resources/art-map.json"),
                 .process("Resources/skelf.svg"),
+                .process("Resources/skelf-menubar.pdf"),
             ]
         ),
     ],
