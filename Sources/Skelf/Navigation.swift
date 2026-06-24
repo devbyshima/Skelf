@@ -225,17 +225,22 @@ struct FolderScreen: View {
                           onOpenFolder: { model.path.append(.folder($0)) })
             .navigationTitle(folderId == model.folders.rootId ? "Skelf" : model.folderName(folderId))
             .searchable(text: $query, prompt: "Search all skills & folders")
+            // Every item is pinned to `.primaryAction` (the trailing edge). These items appear and
+            // disappear with state (Paste only when something's clipped; New Folder + its spacer
+            // only off the Favorites folder), which rebuilds the bridged NSToolbar — and with the
+            // default `.automatic` placement, items could land on the LEADING edge (by the traffic
+            // lights) for a frame, flickering the window. Explicit placement keeps them trailing.
             .toolbar {
                 // The virtual Favorites folder can't hold sub-folders or pasted items.
                 if folderId != favoritesFolderId {
                     if hasClip {
-                        ToolbarItem {
+                        ToolbarItem(placement: .primaryAction) {
                             Button { model.pasteInto(folderId) } label: {
                                 Label("Paste \(clipName)", systemImage: "doc.on.clipboard")
                             }
                         }
                     }
-                    ToolbarItem {
+                    ToolbarItem(placement: .primaryAction) {
                         Button { model.newFolder(in: folderId) } label: {
                             Label("New Folder", systemImage: "folder.badge.plus")
                         }
@@ -246,7 +251,7 @@ struct FolderScreen: View {
                 }
                 // Settings — its own button, available on every screen (stands alone on the
                 // Favorites screen, where New Folder and the spacer above are absent).
-                ToolbarItem {
+                ToolbarItem(placement: .primaryAction) {
                     Button { NSApp.sendAction(#selector(AppDelegate.openSettings), to: nil, from: nil) } label: {
                         Label("Settings", systemImage: "gearshape")
                     }
