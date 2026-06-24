@@ -6,6 +6,8 @@ All notable changes to Skelf are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-06-24
+
 ### Added
 
 - Empty states in the main window — a search with no matches, an empty Favorites or folder, and a
@@ -130,7 +132,8 @@ All notable changes to Skelf are documented here. The format is based on
 - Restructured from a single source file into focused files under `Sources/Skelf/`, added a
   SwiftPM `Package.swift` (opens in Xcode / `swift build`), CI, SwiftLint, and contributor docs.
 
-[Unreleased]: https://github.com/devbyshima/Skelf/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/devbyshima/Skelf/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/devbyshima/Skelf/releases/tag/v1.5.2
 [1.5.1]: https://github.com/devbyshima/Skelf/releases/tag/v1.5.1
 [1.5.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.5.0
 [1.4.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.4.0
