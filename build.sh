@@ -43,8 +43,10 @@ PLIST
 # Runtime resources live with the target (Sources/Skelf/Resources/) so SwiftPM/Xcode bundle
 # them too (Bundle.module); build.sh copies them into Skelf.app (Bundle.main). See Bundle+Skelf.swift.
 RUNRES="$SRCDIR/Resources"
-# Menu-bar icon: the Skelf mark (loaded as a vector template image at runtime).
+# Menu-bar icon: the Skelf mark as a vector PDF template (loaded at runtime; skelf.svg is its
+# source, kept alongside for regeneration). The PDF is what the status item actually uses.
 [ -f "$RUNRES/skelf.svg" ] && cp "$RUNRES/skelf.svg" "$APP/Contents/Resources/skelf.svg"
+[ -f "$RUNRES/skelf-menubar.pdf" ] && cp "$RUNRES/skelf-menubar.pdf" "$APP/Contents/Resources/skelf-menubar.pdf"
 # Per-skill public-domain painting map (skill id → artwork URL); optional — the app
 # generates a themed fallback for any skill not listed.
 [ -f "$RUNRES/art-map.json" ] && cp "$RUNRES/art-map.json" "$APP/Contents/Resources/art-map.json"
