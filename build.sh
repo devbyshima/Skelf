@@ -12,8 +12,8 @@ ARCH="$(uname -m)"   # arm64 on Apple Silicon
 # (marketing) version, SemVer; SKELF_BUILD is a monotonic build number, bumped each release
 # build. Both are written into Info.plist below and read back at runtime by Bundle+Skelf.swift
 # (skelfShortVersion / skelfBuildVersion) and surfaced via `Skelf --version`.
-SKELF_VERSION="1.5.1"
-SKELF_BUILD="8"
+SKELF_VERSION="1.5.2"
+SKELF_BUILD="9"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
