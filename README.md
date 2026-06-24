@@ -16,7 +16,20 @@ Browse them as a grid, read a skill's rendered `SKILL.md`, and copy its slash co
 
 </div>
 
-![Skelf — the grill-me skill open in detail: a NASA artwork banner, its rendered SKILL.md, and a one-click Copy for the /grill-me slash command](docs/screenshot.png)
+<p align="center">
+  <img src="docs/skills-grid.png" width="840" alt="Skelf — a grid of skill cards, each backed by a unique public-domain NASA space image, with a name, description and a Copy button">
+</p>
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/home.png" alt="Skelf home — skills auto-organized into a folder per creator, each with the creator's GitHub avatar, plus a pinned Favorites folder"><br><sub><b>Auto-organized by creator</b> — a folder per owner (with their GitHub avatar), Favorites pinned first.</sub></td>
+    <td width="50%" valign="top"><img src="docs/skill-detail.png" alt="grill-me skill detail — a NASA artwork banner, rendered SKILL.md, an on-device plain-English explanation, and a Copy button for /grill-me"><br><sub><b>Skill detail</b> — rendered <code>SKILL.md</code>, an on-device plain-English explanation, and one-click <b>Copy</b> for the slash command.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/menu-bar.png" alt="Skelf menu-bar popover — favorites shown as cards with copy buttons above a search field"><br><sub><b>Menu-bar popover</b> — favorites &amp; pinned folders as cards, global search, copy with a toast. Toggle from anywhere with <kbd>⌥⌘S</kbd>.</sub></td>
+    <td width="50%" valign="top"><img src="docs/settings.png" alt="Skelf settings — native preferences with General, Appearance, Intelligence and Updates tabs"><br><sub><b>Native settings</b> — Launch at Login, Menu Bar Only, appearance, on-device AI search, and auto-update.</sub></td>
+  </tr>
+</table>
 
 Skelf reads the skills you've installed under your dev directory straight from disk and lays
 them out as a grid of image-backed cards, grouped into a folder per creator. Open any card for
