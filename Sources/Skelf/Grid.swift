@@ -167,6 +167,10 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
     private let skillItemID = NSUserInterfaceItemIdentifier("SkillGridItem")
     private let folderItemID = NSUserInterfaceItemIdentifier("FolderGridItem")
 
+    // Empty-state overlay (search has no matches, an empty Favorites/folder, or no skills yet).
+    // A SwiftUI ContentUnavailableView hosted over the collection view; hidden when there's content.
+    private let emptyHost = NSHostingView(rootView: GridEmptyState(kind: nil))
+
     init(model: SkelfModel, folderId: String) {
         self.model = model
         self.folderId = folderId
@@ -195,6 +199,17 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
                                 withIdentifier: SectionHeaderView.id)
         collectionView.onActivate = { [weak self] ip in self?.activate(ip) }
         gridScroll.documentView = collectionView
+
+        // Positioned with an autoresizing mask (NOT Auto Layout): the SwiftUI host measures this
+        // controller's view to size the window, and a constraint-pinned NSHostingView here would
+        // corrupt that measurement (collapsing the window and the grid). An autoresizing-mask
+        // overlay tracks the size without contributing to the fitting-size computation.
+        emptyHost.translatesAutoresizingMaskIntoConstraints = true
+        emptyHost.sizingOptions = []      // don't feed SwiftUI's size back into Auto Layout
+        emptyHost.frame = root.bounds
+        emptyHost.autoresizingMask = [.width, .height]
+        emptyHost.isHidden = true
+        root.addSubview(emptyHost)        // centers its content over the (empty) grid
 
         NSLayoutConstraint.activate([
             gridScroll.topAnchor.constraint(equalTo: root.topAnchor),
@@ -269,7 +284,29 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
 
     // Clear any hover tip first: reloadData() tears down items without firing mouseExited,
     // so a tip for a card that's about to vanish could otherwise stay stuck on screen.
-    func reload() { SkillHoverTip.shared.cancel(); buildEntries(); collectionView.reloadData() }
+    func reload() { SkillHoverTip.shared.cancel(); buildEntries(); collectionView.reloadData(); updateEmptyState() }
+
+    /// Show the matching empty state when a screen lists nothing; hide it once there's content.
+    private func updateEmptyState() {
+        guard sections.isEmpty else {
+            if !emptyHost.isHidden { emptyHost.isHidden = true; emptyHost.rootView = GridEmptyState(kind: nil) }
+            return
+        }
+        let q = query.trimmingCharacters(in: .whitespaces)
+        let kind: EmptyKind
+        if !q.isEmpty {
+            // Still waiting on the on-device AI ranking? Show "Searching…" rather than flash "no results".
+            kind = pendingRankQuery != nil ? .searching(q) : .searchNoResults(q)
+        } else if folderId == favoritesFolderId {
+            kind = .noFavorites
+        } else if model.store.skills.isEmpty {
+            kind = .noSkills
+        } else {
+            kind = .emptyFolder
+        }
+        emptyHost.rootView = GridEmptyState(kind: kind)
+        emptyHost.isHidden = false
+    }
 
     /// Update only the favorite stars on visible cards — no reorder, no reload (so the
     /// card that was just tapped keeps its in-place pop animation).
@@ -337,8 +374,10 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
         let skills = here.filter { $0.enabled && skillMatches($0, q) }     // stored order; favoriting never reorders
         let off = here.filter { !$0.enabled && skillMatches($0, q) }
         var folderEntries: [GridEntry] = folders.map { .folder($0) }
-        // Pin the special Favorites folder first on the home grid (not while searching).
-        if folderId == model.folders.rootId && q.isEmpty {
+        // Pin the special Favorites folder first on the home grid (not while searching). Skip it
+        // when nothing is installed at all, so the home screen shows the "No Skills Installed"
+        // empty state instead of a lone, useless Favorites card.
+        if folderId == model.folders.rootId && q.isEmpty && !model.store.skills.isEmpty {
             let favCount = model.store.skills.filter { model.favorites.isFavorite($0.id) }.count
             folderEntries.insert(.favorites(favCount), at: 0)
         }
