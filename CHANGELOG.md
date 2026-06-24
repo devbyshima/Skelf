@@ -6,6 +6,12 @@ All notable changes to Skelf are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- The **menu-bar icon** is now visible in release builds. It ships as a vector PDF template loaded
+  through AppKit's standard template path, replacing a runtime-rasterized bitmap that rendered
+  blank in the live status bar when the app was built against the macOS 26 SDK.
+
 ## [1.5.0] - 2026-06-21
 
 ### Changed
