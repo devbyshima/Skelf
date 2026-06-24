@@ -55,32 +55,205 @@ final class SkillStore {
 
     // A place skills can live. `installed` holds <id>/SKILL.md. If `enabled` is non-nil a
     // skill is "on" only when <id> also exists there (the .agents↔.claude symlink installer);
-    // if nil, every skill found is on (the standard ~/.claude/skills directory).
-    struct Root { let installed: URL; let enabled: URL?; let lock: URL? }
+    // if nil, every skill found is on (a standard or plugin-provided skills directory).
+    // `defaultSource` attributes skills with no skills-lock.json entry (e.g. the plugin or
+    // marketplace folder they came from) rather than the bare "local".
+    struct Root {
+        let installed: URL
+        let enabled: URL?
+        let lock: URL?
+        var defaultSource: String?
 
-    // Skills can live in several places on a given machine; scan them all so the app works
-    // for any user without configuration. Order = metadata priority (first match wins).
+        init(installed: URL, enabled: URL?, lock: URL?, defaultSource: String? = nil) {
+            self.installed = installed; self.enabled = enabled
+            self.lock = lock; self.defaultSource = defaultSource
+        }
+    }
+
+    // Skills live in many places: the `npx skills` installer layout, the standard Claude config
+    // dir (relocatable via CLAUDE_CONFIG_DIR / XDG_CONFIG_HOME), plugin & marketplace bundles,
+    // and project `.claude/skills` folders inside your code directories. Discover them all so the
+    // app works for any user without configuration. Order = metadata priority (the first root to
+    // hold a given skill id wins), so the rich installer layout is preferred over bare copies.
+    private static var rootCache: [Root] = []
+    private static var rootCacheStamp = Date.distantPast
+
+    /// Discovered roots, cached briefly so the launch reload + watcher setup (and rapid
+    /// FSEvents-triggered reloads) don't each re-crawl the disk. `reload()` always re-reads each
+    /// root's contents regardless, so new skills in existing roots appear immediately; only a
+    /// brand-new root waits out the cache. Manual Refresh Skills calls `invalidateRootCache()`.
     static func discoverRoots() -> [Root] {
+        if !rootCache.isEmpty, Date().timeIntervalSince(rootCacheStamp) < 20 { return rootCache }
+        let roots = scanRoots()
+        rootCache = roots
+        rootCacheStamp = Date()
+        return roots
+    }
+
+    /// Drop the cached root list so the next discovery re-scans the disk.
+    static func invalidateRootCache() { rootCache = []; rootCacheStamp = .distantPast }
+
+    private static func scanRoots() -> [Root] {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
-        func installer(_ baseDir: URL) -> Root {
-            Root(installed: baseDir.appendingPathComponent(".agents/skills"),
-                 enabled: baseDir.appendingPathComponent(".claude/skills"),
-                 lock: baseDir.appendingPathComponent("skills-lock.json"))
-        }
         var roots: [Root] = []
+
+        // 1. Explicit override + the `npx skills` installer layout (.agents/skills, with
+        //    .claude/skills symlinks marking what's enabled, plus skills-lock.json).
         if let ov = ProcessInfo.processInfo.environment["SKILLS_DEV_DIR"], !ov.isEmpty {
-            roots.append(installer(URL(fileURLWithPath: (ov as NSString).expandingTildeInPath)))
+            roots.append(installerRoot(URL(fileURLWithPath: (ov as NSString).expandingTildeInPath)))
         }
-        roots.append(installer(home.appendingPathComponent("Dev")))          // the `npx skills` installer layout
-        // Standard Claude Code skill directories (each skill present here is active):
-        roots.append(Root(installed: home.appendingPathComponent(".claude/skills"),
-                          enabled: nil, lock: home.appendingPathComponent(".claude/skills-lock.json")))
-        roots.append(Root(installed: home.appendingPathComponent(".config/claude/skills"), enabled: nil, lock: nil))
-        // …and the project the app was launched in, if any.
+        roots.append(installerRoot(home.appendingPathComponent("Dev")))
+        roots.append(installerRoot(home))
+
+        // 2. The project Skelf was launched in, if any (installer layout or a plain .claude/skills).
         let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
+        roots.append(installerRoot(cwd))
         roots.append(Root(installed: cwd.appendingPathComponent(".claude/skills"), enabled: nil, lock: nil))
-        return roots.filter { fm.fileExists(atPath: $0.installed.path) }
+
+        // 3. Every Claude config base (honoring CLAUDE_CONFIG_DIR / XDG_CONFIG_HOME): its standard
+        //    skills/ directory plus any plugin- or marketplace-provided skills.
+        for base in configBases() {
+            roots.append(Root(installed: base.appendingPathComponent("skills"), enabled: nil,
+                              lock: existingFile(base.appendingPathComponent("skills-lock.json"))))
+            roots.append(contentsOf: pluginRoots(under: base))
+        }
+
+        // 4. Recursively scan common code folders for project-level skills in any repo.
+        roots.append(contentsOf: projectRoots())
+
+        // Keep the order, drop duplicate scan targets, and keep only roots that exist.
+        var seen = Set<String>()
+        return roots.filter { root in
+            let path = root.installed.standardizedFileURL.path
+            guard seen.insert(path).inserted else { return false }
+            return isDirectory(root.installed)
+        }
+    }
+
+    /// The `npx skills` installer layout rooted at `baseDir`.
+    private static func installerRoot(_ baseDir: URL) -> Root {
+        Root(installed: baseDir.appendingPathComponent(".agents/skills"),
+             enabled: baseDir.appendingPathComponent(".claude/skills"),
+             lock: baseDir.appendingPathComponent("skills-lock.json"))
+    }
+
+    /// Claude's config base directories, most authoritative first. `CLAUDE_CONFIG_DIR` is the
+    /// official relocation lever; `XDG_CONFIG_HOME/claude` and the two defaults cover the rest.
+    private static func configBases() -> [URL] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let env = ProcessInfo.processInfo.environment
+        var bases: [URL] = []
+        func add(_ url: URL) {
+            let p = url.standardizedFileURL.path
+            if !bases.contains(where: { $0.standardizedFileURL.path == p }) { bases.append(url) }
+        }
+        if let c = env["CLAUDE_CONFIG_DIR"], !c.isEmpty {
+            add(URL(fileURLWithPath: (c as NSString).expandingTildeInPath))
+        }
+        add(home.appendingPathComponent(".claude"))
+        if let x = env["XDG_CONFIG_HOME"], !x.isEmpty {
+            add(URL(fileURLWithPath: (x as NSString).expandingTildeInPath).appendingPathComponent("claude"))
+        }
+        add(home.appendingPathComponent(".config/claude"))
+        return bases
+    }
+
+    /// Skills bundled by installed plugins / marketplaces: every `skills/` directory under
+    /// `<base>/plugins`, attributed to the plugin or marketplace folder it sits in.
+    private static func pluginRoots(under base: URL) -> [Root] {
+        let fm = FileManager.default
+        let pluginsDir = base.appendingPathComponent("plugins")
+        guard isDirectory(pluginsDir) else { return [] }
+        var roots: [Root] = []
+        var seen = Set<String>()
+        var stack: [(URL, Int)] = [(pluginsDir, 0)]
+        let maxDepth = 4, maxVisited = 2000
+        while let (dir, depth) = stack.popLast(), seen.count < maxVisited {
+            guard seen.insert(dir.resolvingSymlinksInPath().path).inserted else { continue }   // skip symlink cycles
+            let children = (try? fm.contentsOfDirectory(at: dir,
+                includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
+            for child in children where isDirectory(child) {
+                if child.lastPathComponent == "skills" {
+                    roots.append(Root(installed: child, enabled: nil, lock: nil,
+                                      defaultSource: pluginSource(for: child)))
+                } else if depth < maxDepth {
+                    stack.append((child, depth + 1))
+                }
+            }
+        }
+        return roots
+    }
+
+    /// Bounded crawl of common code directories for project skill folders (the `.agents/skills`
+    /// installer layout or a plain `.claude/skills`). Skips heavy build/dependency dirs and caps
+    /// the work so it stays cheap to run on launch and on every reload.
+    private static func projectRoots() -> [Root] {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        let starts = ["Dev", "Developer", "Projects", "projects", "code", "Code", "src",
+                      "work", "repos", "git", "GitHub", "Documents/GitHub"]
+            .map { home.appendingPathComponent($0) }
+            .filter { isDirectory($0) }
+        let skip: Set<String> = ["node_modules", ".git", ".build", "build", "DerivedData",
+            "Pods", ".next", "dist", "out", "target", "vendor", ".venv", "venv", ".cache",
+            ".gradle", ".idea", ".svn", "__pycache__", "Carthage", ".swiftpm"]
+        var roots: [Root] = []
+        var seen = Set<String>()
+        var stack: [(URL, Int)] = starts.map { ($0, 0) }
+        let maxVisited = 3000, maxDepth = 4
+        while let (dir, depth) = stack.popLast(), seen.count < maxVisited {
+            guard seen.insert(dir.resolvingSymlinksInPath().path).inserted else { continue }   // skip symlink cycles
+            if isDirectory(dir.appendingPathComponent(".agents/skills")) {
+                roots.append(installerRoot(dir))
+            } else if isDirectory(dir.appendingPathComponent(".claude/skills")) {
+                roots.append(Root(installed: dir.appendingPathComponent(".claude/skills"), enabled: nil,
+                                  lock: existingFile(dir.appendingPathComponent("skills-lock.json"))))
+            }
+            guard depth < maxDepth else { continue }
+            let children = (try? fm.contentsOfDirectory(at: dir,
+                includingPropertiesForKeys: [.isDirectoryKey], options: [])) ?? []
+            for child in children where isDirectory(child) {
+                let name = child.lastPathComponent
+                // .claude/.agents are detected from their parent above; never descend into
+                // hidden dirs (keeps the crawl off skill internals, .git, caches, etc.).
+                if name.hasPrefix(".") || skip.contains(name) { continue }
+                stack.append((child, depth + 1))
+            }
+        }
+        return roots
+    }
+
+    /// A readable source label for a plugin/marketplace `skills/` dir: the nearest ancestor
+    /// folder that names the plugin or marketplace, skipping version dirs (`1.3.0`, `v2`) and
+    /// generic containers (`plugins`, `cache`, `marketplaces`, …) so cached plugins like
+    /// `…/expo/1.3.0/skills` are attributed to "expo", not "1.3.0".
+    private static func pluginSource(for skillsDir: URL) -> String {
+        let generic: Set<String> = ["skills", "plugins", "cache", "repos", "marketplaces",
+                                    "external_plugins", "plugin", "node_modules"]
+        func versionLike(_ s: String) -> Bool {
+            let core = s.hasPrefix("v") ? String(s.dropFirst()) : s
+            let head = core.split(separator: "-").first.map(String.init) ?? core
+            return !head.isEmpty && head.contains(where: \.isNumber)
+                && head.allSatisfy { $0.isNumber || $0 == "." }
+        }
+        var url = skillsDir.deletingLastPathComponent()
+        for _ in 0..<6 {
+            let name = url.lastPathComponent
+            guard !name.isEmpty, name != "/" else { break }
+            if !generic.contains(name) && !versionLike(name) { return name }
+            url = url.deletingLastPathComponent()
+        }
+        return "local"   // pathological all-generic/version ancestry — avoid a junk label
+    }
+
+    private static func isDirectory(_ url: URL) -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    private static func existingFile(_ url: URL) -> URL? {
+        FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     // Directories the FSEvents watcher should follow for live add/remove/enable changes.
@@ -99,13 +272,15 @@ final class SkillStore {
                             options: [.skipsHiddenFiles])) ?? []
             for dir in dirs {
                 let id = dir.lastPathComponent
-                if byId[id] != nil { continue }   // the first root that has this skill wins
                 let md = dir.appendingPathComponent("SKILL.md")
                 guard fm.fileExists(atPath: md.path) else { continue }
-                let frontmatter = Self.parseFrontmatter(md)
-                let meta = lock[id]
                 let enabled = root.enabled == nil ? true
                             : fm.fileExists(atPath: root.enabled!.appendingPathComponent(id).path)
+                // First root to hold a skill wins — but a disabled copy in a high-priority root
+                // must not mask the same skill found enabled in a later one.
+                if let existing = byId[id], existing.enabled || !enabled { continue }
+                let frontmatter = Self.parseFrontmatter(md)
+                let meta = lock[id]
                 let files = (try? fm.contentsOfDirectory(atPath: dir.path))?.count ?? 1
                 var installed = "—"
                 if let attrs = try? fm.attributesOfItem(atPath: dir.path), let d = attrs[.modificationDate] as? Date {
@@ -116,7 +291,7 @@ final class SkillStore {
                     name: frontmatter.name ?? id,
                     description: frontmatter.description ?? "",
                     version: frontmatter.version,
-                    source: meta?.source ?? "local",
+                    source: meta?.source ?? root.defaultSource ?? "local",
                     category: Self.category(fromPath: meta?.skillPath ?? id),
                     skillPath: meta?.skillPath ?? "\(id)/SKILL.md",
                     enabled: enabled,

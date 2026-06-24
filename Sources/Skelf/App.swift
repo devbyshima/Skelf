@@ -256,6 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     }
 
     private func reloadFromDisk(auto: Bool) {
+        if !auto { SkillStore.invalidateRootCache() }   // a manual Refresh re-scans for new roots
         store.reload()
         ArtStore.shared.updateAssignment(store.skills.map { $0.id })
         folders.syncInstalled(Set(store.skills.map { $0.id }))
