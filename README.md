@@ -7,7 +7,7 @@
 **A native macOS menu-bar app for browsing your installed Claude Code skills.**
 
 Browse them as a grid, read a skill's rendered `SKILL.md`, and copy its slash command
-(e.g. `/humanizer`) to paste into a cloud session.
+(e.g. `/grill-me`) to paste into a cloud session.
 
 [![Latest release](https://img.shields.io/github/v/release/devbyshima/Skelf?label=download&color=da7756)](https://github.com/devbyshima/Skelf/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS-26%2B-black)](#install)
@@ -16,7 +16,7 @@ Browse them as a grid, read a skill's rendered `SKILL.md`, and copy its slash co
 
 </div>
 
-![Skelf — a grid of skill cards grouped into creator folders, with a search bar and menu-bar access](docs/screenshot.png)
+![Skelf — the grill-me skill open in detail: a NASA artwork banner, its rendered SKILL.md, and a one-click Copy for the /grill-me slash command](docs/screenshot.png)
 
 Skelf reads the skills you've installed under your dev directory straight from disk and lays
 them out as a grid of image-backed cards, grouped into a folder per creator. Open any card for
