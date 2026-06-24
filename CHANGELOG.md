@@ -6,6 +6,8 @@ All notable changes to Skelf are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-06-24
+
 ### Fixed
 
 - The **menu-bar icon** is now visible in release builds. It ships as a vector PDF template loaded
@@ -123,7 +125,8 @@ All notable changes to Skelf are documented here. The format is based on
 - Restructured from a single source file into focused files under `Sources/Skelf/`, added a
   SwiftPM `Package.swift` (opens in Xcode / `swift build`), CI, SwiftLint, and contributor docs.
 
-[Unreleased]: https://github.com/devbyshima/Skelf/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/devbyshima/Skelf/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/devbyshima/Skelf/releases/tag/v1.5.1
 [1.5.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.5.0
 [1.4.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.4.0
 [1.3.0]: https://github.com/devbyshima/Skelf/releases/tag/v1.3.0
