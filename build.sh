@@ -81,12 +81,26 @@ swiftc -O -swift-version 5 -parse-as-library \
 
 # Compile the SwiftUI Metal shaders (Shaders.metal) into the app's default.metallib so
 # SwiftUI's ShaderLibrary can load them at runtime (the ripple effect on the artwork popup).
-# swiftc above only compiles *.swift; the .metal file needs the Metal toolchain.
+# swiftc above only compiles *.swift; the .metal file needs the Metal toolchain, which ships
+# inside Xcode but NOT the Command Line Tools. When `xcode-select` points at the CLT (common on
+# dev machines), a bare `xcrun metal` can't find the compiler — so probe for a Developer dir that
+# has it (the active one first, so CI's full Xcode is used unchanged), then run metal under it.
 METAL_SRC="$SRCDIR/Shaders.metal"
 if [ -f "$METAL_SRC" ]; then
-  if xcrun -sdk macosx metal -o "$DIR/Skelf.air" -c "$METAL_SRC" 2>/dev/null \
-     && xcrun -sdk macosx metallib "$DIR/Skelf.air" -o "$APP/Contents/Resources/default.metallib" 2>/dev/null; then
-    echo "Built default.metallib (Metal shaders)"
+  METAL_DEV_DIR=""
+  for d in \
+    "$(xcode-select -p 2>/dev/null)" \
+    "/Applications/Xcode-beta.app/Contents/Developer" \
+    "/Applications/Xcode.app/Contents/Developer"; do
+    if [ -n "$d" ] && DEVELOPER_DIR="$d" xcrun -sdk macosx -f metal >/dev/null 2>&1; then
+      METAL_DEV_DIR="$d"; break
+    fi
+  done
+  if [ -z "$METAL_DEV_DIR" ]; then
+    echo "WARNING: no Metal toolchain found (install Xcode); the ripple effect will be inert." >&2
+  elif DEVELOPER_DIR="$METAL_DEV_DIR" xcrun -sdk macosx metal -o "$DIR/Skelf.air" -c "$METAL_SRC" \
+       && DEVELOPER_DIR="$METAL_DEV_DIR" xcrun -sdk macosx metallib "$DIR/Skelf.air" -o "$APP/Contents/Resources/default.metallib"; then
+    echo "Built default.metallib (Metal shaders, via $METAL_DEV_DIR)"
   else
     echo "WARNING: Metal shader compile failed; the ripple effect will be inert." >&2
   fi
