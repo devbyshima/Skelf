@@ -6,6 +6,22 @@ All notable changes to Skelf are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Comprehensive skill detection. Skelf now finds skills wherever Claude Code keeps them, instead
+  of reading a single `~/Dev` base: it honors `CLAUDE_CONFIG_DIR` / `XDG_CONFIG_HOME`, scans every
+  Claude config base (`~/.claude`, `~/.config/claude`), includes plugin- and marketplace-provided
+  skills (each attributed to its plugin/marketplace), keeps the `npx skills` installer layout, and
+  does a bounded scan of common code folders (`~/Dev`, `~/Developer`, `~/Projects`, …) for
+  project-level `.claude/skills`.
+
+### Changed
+
+- Re-licensed from MIT to the **GNU Affero General Public License v3.0 (AGPL-3.0)**. Skelf stays
+  free to install, use, and modify, but any redistributed or wrapped version (including one offered
+  over a network) must ship its full source under the same license — so it can't be turned into a
+  closed-source or rebranded product. (Anything already published under MIT remains under MIT.)
+
 ## [1.5.3] - 2026-06-24
 
 ### Changed
