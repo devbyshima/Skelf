@@ -6,6 +6,11 @@ All notable changes to Skelf are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Empty states in the main window — a search with no matches, an empty Favorites or folder, and a
+  fresh install with no skills yet now show a clear message and guidance instead of a blank grid.
+
 ## [1.5.1] - 2026-06-24
 
 ### Fixed
