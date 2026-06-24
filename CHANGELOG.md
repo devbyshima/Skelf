@@ -6,6 +6,12 @@ All notable changes to Skelf are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- The "update available" prompt is now a designed window — the app icon, the new version, the
+  release's rendered notes, and an in-window **download → verify → install** progress (with a live
+  download percentage) — replacing the plain alert and the separate floating progress HUD.
+
 ## [1.5.2] - 2026-06-24
 
 ### Added

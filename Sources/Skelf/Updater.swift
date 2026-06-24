@@ -16,6 +16,7 @@ enum Updater {
     private static let lastCheckKey = "lastUpdateCheckAt"
     private static let skipVersionKey = "skipUpdateVersion"
     private static var inFlight = false
+    private static var progressObs: NSKeyValueObservation?     // download progress → the window's bar
 
     // MARK: - Entry points
 
@@ -112,24 +113,15 @@ enum Updater {
     // MARK: - Prompt
 
     private static func promptUpdate(_ rel: Release) {
-        NSApp.activate(ignoringOtherApps: true)
-        let a = NSAlert()
-        a.messageText = "Skelf \(rel.version) is available"
-        a.informativeText = notesPreview(rel.notes)
-        a.addButton(withTitle: "Install & Relaunch")
-        a.addButton(withTitle: "Skip This Version")
-        a.addButton(withTitle: "Later")
-        switch a.runModal() {
-        case .alertFirstButtonReturn: startDownload(rel)
-        case .alertSecondButtonReturn: UserDefaults.standard.set(rel.version, forKey: skipVersionKey)
-        default: break
-        }
-    }
-
-    private static func notesPreview(_ notes: String) -> String {
-        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "A new version of Skelf is available. It will download, verify, and relaunch." }
-        return trimmed.count > 700 ? String(trimmed.prefix(700)) + "…" : trimmed
+        let notes = rel.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        UpdateWindowController.shared.present(
+            currentVersion: skelfShortVersion,
+            newVersion: rel.version,
+            notes: notes.isEmpty ? "A new version of Skelf is available. It will download, verify, and relaunch." : notes,
+            onInstall: { startDownload(rel) },
+            onSkip: { UserDefaults.standard.set(rel.version, forKey: skipVersionKey) },
+            onOpenPage: { NSWorkspace.shared.open(rel.page) }
+        )
     }
 
     // MARK: - Download → verify → install
@@ -137,23 +129,19 @@ enum Updater {
     private static func startDownload(_ rel: Release) {
         let bundle = Bundle.main.bundleURL
         if bundle.path.contains("/AppTranslocation/") {
-            info("Move Skelf to Applications first",
-                 "Skelf is running from a temporary, read-only location. Drag it into your Applications folder and try again.")
-            return openPage(rel)
+            return finishError("Skelf is running from a temporary, read-only location. Move it into your Applications folder, or open the download page to update manually.")
         }
         let parent = bundle.deletingLastPathComponent().path
         guard FileManager.default.isWritableFile(atPath: bundle.path),
               FileManager.default.isWritableFile(atPath: parent) else {
-            info("Can’t update automatically",
-                 "Skelf doesn’t have permission to replace itself at \(bundle.path). I’ll open the download page so you can update it manually.")
-            return openPage(rel)
+            return finishError("Skelf can’t replace itself at \(bundle.path). Open the download page to update manually.")
         }
 
-        ProgressHUD.shared.begin("Downloading Skelf \(rel.version)…")
         var req = URLRequest(url: rel.dmg)
         req.setValue("Skelf/\(skelfShortVersion)", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 60
-        URLSession.shared.downloadTask(with: req) { tmp, resp, err in
+        let task = URLSession.shared.downloadTask(with: req) { tmp, resp, err in
+            DispatchQueue.main.async { progressObs?.invalidate(); progressObs = nil }
             guard let tmp = tmp, (resp as? HTTPURLResponse)?.statusCode == 200, err == nil else {
                 return finishError("The download didn’t complete.")
             }
@@ -162,12 +150,18 @@ enum Updater {
             do { try FileManager.default.moveItem(at: tmp, to: URL(fileURLWithPath: dmgPath)) }
             catch { return finishError("Couldn’t save the download.") }
             verifyThenInstall(rel, dmgPath: dmgPath)
-        }.resume()
+        }
+        // Live download percentage into the window's progress bar.
+        progressObs = task.progress.observe(\.fractionCompleted) { p, _ in
+            let f = p.fractionCompleted
+            DispatchQueue.main.async { UpdateWindowController.shared.phase(.downloading(f)) }
+        }
+        task.resume()
     }
 
     /// Verify the DMG against the release's SHA256SUMS before touching anything on disk.
     private static func verifyThenInstall(_ rel: Release, dmgPath: String) {
-        DispatchQueue.main.async { ProgressHUD.shared.update("Verifying…") }
+        DispatchQueue.main.async { UpdateWindowController.shared.phase(.verifying) }
         guard let sums = rel.sums else {
             // No checksum published (older release) — fall back to TLS-only trust.
             return install(rel, dmgPath: dmgPath)
@@ -192,7 +186,7 @@ enum Updater {
     /// Mount the DMG, stage a quarantine-free copy of the new app, detach, then hand off to a
     /// detached shell that waits for this process to quit, swaps the bundle, and relaunches.
     private static func install(_ rel: Release, dmgPath: String) {
-        DispatchQueue.main.async { ProgressHUD.shared.update("Installing…") }
+        DispatchQueue.main.async { UpdateWindowController.shared.phase(.installing) }
         let mount = NSTemporaryDirectory() + "SkelfUpdateMount-\(rel.version)"
         let staging = NSTemporaryDirectory() + "SkelfUpdateStage-\(rel.version)"
         let stagedApp = staging + "/Skelf.app"
@@ -225,7 +219,7 @@ enum Updater {
         do { try proc.run() } catch { return finishError("Couldn’t start the installer.") }
 
         DispatchQueue.main.async {
-            ProgressHUD.shared.update("Relaunching…")
+            UpdateWindowController.shared.phase(.relaunching)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { NSApp.terminate(nil) }
         }
     }
@@ -258,12 +252,10 @@ enum Updater {
 
     // MARK: - Helpers
 
-    private static func openPage(_ rel: Release) { NSWorkspace.shared.open(rel.page) }
-
     private static func finishError(_ message: String) {
         DispatchQueue.main.async {
-            ProgressHUD.shared.end()
-            info("Update failed", message)
+            progressObs?.invalidate(); progressObs = nil
+            UpdateWindowController.shared.phase(.failed(message))
         }
     }
 
@@ -327,76 +319,5 @@ enum Updater {
     /// Single-quote a path for safe interpolation into the `/bin/sh -c` hand-off.
     private static func q(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-}
-
-// A small floating Liquid Glass HUD shown while an update downloads, verifies, and installs.
-final class ProgressHUD {
-    static let shared = ProgressHUD()
-    private var panel: NSPanel?
-    private let label = NSTextField(labelWithString: "")
-    private let spinner = NSProgressIndicator()
-
-    func begin(_ message: String) {
-        end()
-        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 260, height: 96),
-                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
-        p.isOpaque = false
-        p.backgroundColor = .clear
-        p.hasShadow = true
-        p.level = .floating
-        p.isFloatingPanel = true
-        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-
-        let container = NSView()
-        container.wantsLayer = true
-        p.contentView = container
-
-        let glass = NSGlassEffectView()
-        glass.cornerRadius = 18
-        glass.style = .regular
-        glass.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(glass)
-        NSLayoutConstraint.activate([
-            glass.topAnchor.constraint(equalTo: container.topAnchor),
-            glass.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            glass.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            glass.trailingAnchor.constraint(equalTo: container.trailingAnchor)
-        ])
-
-        let inner = NSView()
-        inner.translatesAutoresizingMaskIntoConstraints = false
-        spinner.style = .spinning
-        spinner.isIndeterminate = true
-        spinner.translatesAutoresizingMaskIntoConstraints = false
-        inner.addSubview(spinner)
-        label.font = .systemFont(ofSize: 13, weight: .medium)
-        label.alignment = .center
-        label.lineBreakMode = .byTruncatingTail
-        label.stringValue = message
-        label.translatesAutoresizingMaskIntoConstraints = false
-        inner.addSubview(label)
-        NSLayoutConstraint.activate([
-            spinner.centerXAnchor.constraint(equalTo: inner.centerXAnchor),
-            spinner.topAnchor.constraint(equalTo: inner.topAnchor, constant: 22),
-            label.topAnchor.constraint(equalTo: spinner.bottomAnchor, constant: 14),
-            label.leadingAnchor.constraint(equalTo: inner.leadingAnchor, constant: 14),
-            label.trailingAnchor.constraint(equalTo: inner.trailingAnchor, constant: -14),
-            label.bottomAnchor.constraint(equalTo: inner.bottomAnchor, constant: -18)
-        ])
-        glass.contentView = inner
-
-        spinner.startAnimation(nil)
-        p.center()
-        p.orderFrontRegardless()
-        panel = p
-    }
-
-    func update(_ message: String) { label.stringValue = message }
-
-    func end() {
-        spinner.stopAnimation(nil)
-        panel?.orderOut(nil)
-        panel = nil
     }
 }
