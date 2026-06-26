@@ -220,7 +220,7 @@ struct FolderScreen: View {
         let favTok = model.favoritesToken
         let hasClip = model.clip != nil
         let clipName = model.clip?.name ?? ""
-        GridRepresentable(model: model, folderId: folderId, query: query, filter: 0, token: token, favToken: favTok,
+        GridRepresentable(model: model, folderId: folderId, query: query, token: token, favToken: favTok,
                           onOpenSkill: { model.path.append(.skill($0)) },
                           onOpenFolder: { model.path.append(.folder($0)) })
             .navigationTitle(folderId == model.folders.rootId ? "Skelf" : model.folderName(folderId))
@@ -300,7 +300,6 @@ struct GridRepresentable: NSViewControllerRepresentable {
     let model: SkelfModel
     let folderId: String
     let query: String
-    let filter: Int
     let token: Int
     let favToken: Int
     let onOpenSkill: (String) -> Void
@@ -315,7 +314,7 @@ struct GridRepresentable: NSViewControllerRepresentable {
     func updateNSViewController(_ vc: GridViewController, context: Context) {
         vc.onOpenSkill = onOpenSkill
         vc.onOpenFolder = onOpenFolder
-        vc.apply(query: query, filter: filter, token: token, favToken: favToken)
+        vc.apply(query: query, token: token, favToken: favToken)
     }
 }
 
@@ -330,8 +329,6 @@ struct DetailRepresentable: NSViewRepresentable {
 
     func makeNSView(context: Context) -> SkillDetailView {
         let v = SkillDetailView(frame: .zero)
-        v.setShowsBackBar(false)
-        v.onBack = { if !model.path.isEmpty { model.path.removeLast() } }
         v.onCopy = { model.copySkill($0) }
         return v
     }

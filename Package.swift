@@ -13,7 +13,6 @@ let package = Package(
             path: "Sources/Skelf",
             resources: [
                 .process("Resources/art-map.json"),
-                .process("Resources/skelf.svg"),
                 .process("Resources/skelf-menubar.pdf"),
             ]
         ),

@@ -14,8 +14,6 @@ final class GitHubVerifier {
     private var verified: Set<String>
     private var notFound: Set<String> = []
     private var inflight: Set<String> = []
-    private var queued: [(String, () -> Void)] = []
-    private let maxInflight = 5
 
     init() { verified = Set(UserDefaults.standard.stringArray(forKey: key) ?? []) }
 
@@ -26,20 +24,12 @@ final class GitHubVerifier {
         return nil
     }
 
-    /// HEAD-check the URL (throttled); calls back on the main queue once resolved (or
-    /// immediately if already known). Must be called on the main queue.
+    /// HEAD-check the URL; calls back on the main queue once resolved (or immediately if
+    /// already known). Connection-level throttling is handled by URLSession's
+    /// httpMaximumConnectionsPerHost (default 6). Must be called on the main queue.
     func verify(_ urlString: String, completion: @escaping () -> Void) {
-        if status(urlString) != nil { completion(); return }
-        queued.append((urlString, completion))
-        pump()
-    }
-
-    private func pump() {
-        while inflight.count < maxInflight, !queued.isEmpty {
-            let (s, done) = queued.removeFirst()
-            if status(s) != nil || inflight.contains(s) { done(); continue }
-            start(s, done)
-        }
+        if status(urlString) != nil || inflight.contains(urlString) { completion(); return }
+        start(urlString, completion)
     }
 
     private func start(_ s: String, _ completion: @escaping () -> Void) {
@@ -60,7 +50,6 @@ final class GitHubVerifier {
                     }   // rate-limit / 5xx / transient: leave unknown, retry next launch
                 }
                 completion()
-                self.pump()
             }
         }.resume()
     }

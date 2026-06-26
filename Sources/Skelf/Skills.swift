@@ -23,10 +23,6 @@ struct Skill: Hashable {
 
     var initiator: String { "/" + id }
     var skillMDPath: String { dirPath + "/SKILL.md" }
-    var githubURL: URL? {                       // the repo root
-        guard source.contains("/") else { return nil }
-        return URL(string: "https://github.com/\(source)")
-    }
     /// The skill's own page in its repo (its folder), not just the repo root. Uses the
     /// `HEAD` ref so it resolves on any default branch (main, master, …).
     var skillGithubURL: URL? {
@@ -62,12 +58,7 @@ final class SkillStore {
         let installed: URL
         let enabled: URL?
         let lock: URL?
-        var defaultSource: String?
-
-        init(installed: URL, enabled: URL?, lock: URL?, defaultSource: String? = nil) {
-            self.installed = installed; self.enabled = enabled
-            self.lock = lock; self.defaultSource = defaultSource
-        }
+        var defaultSource: String? = nil
     }
 
     // Skills live in many places: the `npx skills` installer layout, the standard Claude config
@@ -470,25 +461,8 @@ final class FolderStore {
         var parent: String?      // nil only for root
         var folders: [String]    // child folder ids (ordered)
         var skills: [String]     // skill ids placed here (ordered)
-        var autoCreator: String? // non-nil => auto-folder grouping one creator's skills
-        var showInMenuBar: Bool  // user opted this folder into the menu-bar popover
-
-        enum CodingKeys: String, CodingKey { case id, name, parent, folders, skills, autoCreator, showInMenuBar }
-        init(id: String, name: String, parent: String?, folders: [String], skills: [String],
-             autoCreator: String? = nil, showInMenuBar: Bool = false) {
-            self.id = id; self.name = name; self.parent = parent; self.folders = folders
-            self.skills = skills; self.autoCreator = autoCreator; self.showInMenuBar = showInMenuBar
-        }
-        init(from d: Decoder) throws {                     // tolerant of older saved trees
-            let c = try d.container(keyedBy: CodingKeys.self)
-            id = try c.decode(String.self, forKey: .id)
-            name = try c.decode(String.self, forKey: .name)
-            parent = try c.decodeIfPresent(String.self, forKey: .parent)
-            folders = try c.decode([String].self, forKey: .folders)
-            skills = try c.decode([String].self, forKey: .skills)
-            autoCreator = try c.decodeIfPresent(String.self, forKey: .autoCreator)
-            showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .showInMenuBar) ?? false
-        }
+        var autoCreator: String? = nil  // non-nil => auto-folder grouping one creator's skills
+        var showInMenuBar: Bool = false // user opted this folder into the menu-bar popover
     }
 
     /// The creator/owner shown as the auto-folder name, derived from a skill's source.

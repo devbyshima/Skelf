@@ -1,4 +1,4 @@
-// Shared foundations: palette, gradient/flip views, animation helpers, sounds, appearance, global hot-key, AppSettings, glass card.
+// Shared foundations: palette, flip view, animation helpers, sounds, appearance, global hot-key, AppSettings.
 
 import AppKit
 import SwiftUI
@@ -35,20 +35,6 @@ enum Palette {
 }
 
 final class FlippedView: NSView { override var isFlipped: Bool { true } }
-
-// A view whose single gradient sublayer always tracks its bounds (monogram tile).
-final class GradientView: NSView {
-    let gradient = CAGradientLayer()
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        gradient.startPoint = CGPoint(x: 0, y: 0)
-        gradient.endPoint = CGPoint(x: 1, y: 1)
-        layer?.addSublayer(gradient)
-    }
-    required init?(coder: NSCoder) { fatalError() }
-    override func layout() { super.layout(); gradient.frame = bounds }
-}
 
 // Scale a layer's `transform` around its own centre — avoids anchorPoint juggling
 // inside Auto Layout (settles back to identity, so layout isn't disturbed).
@@ -238,12 +224,6 @@ final class AppSettings {
         applyAppearance()
     }
 }
-
-// A Liquid Glass card. On macOS 27 this gains corners concentric with its container
-// (NSViewCornerConfiguration / .containerConcentric), but that refinement is deferred until the
-// macOS 27 SDK is the released toolchain — so for now it's a plain glass card and callers set
-// cornerRadius. Re-add the `cornerConfiguration` override here when building on Xcode 27+.
-final class GlassCardView: NSGlassEffectView {}
 
 // Verifies that a skill's actual GitHub page exists (HEAD the skill's /tree/HEAD/<path>
 // URL — which also proves the repo and owner exist). Only skills whose page is confirmed
