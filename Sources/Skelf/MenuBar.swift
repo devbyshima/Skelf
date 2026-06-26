@@ -86,8 +86,6 @@ final class ToastWindow: NSPanel {
     private let glass = NSGlassEffectView()
     private let iconView = NSImageView()
     private let label = NSTextField(labelWithString: "")
-    private let undoBtn = ActionButton()
-    var onUndo: (() -> Void)?
     private var dismissWork: DispatchWorkItem?
 
     init() {
@@ -127,15 +125,6 @@ final class ToastWindow: NSPanel {
         label.lineBreakMode = .byTruncatingTail
         label.translatesAutoresizingMaskIntoConstraints = false
         inner.addSubview(label)
-        undoBtn.title = "Undo"
-        undoBtn.isBordered = false
-        undoBtn.contentTintColor = .controlAccentColor
-        undoBtn.font = .systemFont(ofSize: 12.5, weight: .semibold)
-        undoBtn.target = undoBtn
-        undoBtn.action = #selector(ActionButton.fire)
-        undoBtn.onAction = { [weak self] in self?.onUndo?(); self?.dismiss() }
-        undoBtn.translatesAutoresizingMaskIntoConstraints = false
-        inner.addSubview(undoBtn)
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: inner.leadingAnchor, constant: 15),
             iconView.centerYAnchor.constraint(equalTo: inner.centerYAnchor),
@@ -143,28 +132,14 @@ final class ToastWindow: NSPanel {
             iconView.heightAnchor.constraint(equalToConstant: 16),
             label.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 9),
             label.centerYAnchor.constraint(equalTo: inner.centerYAnchor),
-            undoBtn.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 14),
-            undoBtn.trailingAnchor.constraint(equalTo: inner.trailingAnchor, constant: -13),
-            undoBtn.centerYAnchor.constraint(equalTo: inner.centerYAnchor)
+            label.trailingAnchor.constraint(equalTo: inner.trailingAnchor, constant: -13)
         ])
         glass.contentView = inner
     }
     override var canBecomeKey: Bool { false }
 
-    /// Toast with an Undo button (used after a drop).
-    func present(message: String, width: CGFloat, below popover: NSWindow, onUndo: @escaping () -> Void) {
-        self.onUndo = onUndo
-        undoBtn.isHidden = false
-        iconView.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)
-        iconView.contentTintColor = .systemGreen
-        label.stringValue = message
-        animateIn(width: width, below: popover, dismissAfter: 4.0)
-    }
-
     /// Plain message toast (no Undo) — e.g. "Copied /name".
     func presentMessage(_ message: String, icon: String, width: CGFloat, below popover: NSWindow) {
-        onUndo = nil
-        undoBtn.isHidden = true
         iconView.image = NSImage(systemSymbolName: icon, accessibilityDescription: nil)
         iconView.contentTintColor = .systemGreen
         label.stringValue = message
@@ -228,7 +203,6 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     var onRefresh: (() -> Void)?
     var onSettings: (() -> Void)?
     var onQuit: (() -> Void)?
-    var onUndo: (() -> Void)?
 
     private var currentId: String
     private var query = ""
@@ -247,13 +221,6 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     private let doc = FlippedView()
     private let contentStack = NSStackView()
     private var toastWindow: ToastWindow?
-
-    private var cardBG: NSColor {
-        NSColor(name: nil) { ap in
-            let dark = ap.bestMatch(from: [.darkAqua, .vibrantDark]) != nil
-            return dark ? NSColor.white.withAlphaComponent(0.07) : NSColor.black.withAlphaComponent(0.045)
-        }
-    }
 
     init(store: SkillStore, favorites: Favorites, folders: FolderStore) {
         self.store = store; self.favorites = favorites; self.folders = folders
@@ -377,14 +344,6 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
             contentStack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -10)
         ])
         view = root
-    }
-
-    // A separate Liquid Glass toast that drops in below the popover.
-    private func showToast(_ message: String) {
-        guard let pop = view.window else { return }
-        let tw = toastWindow ?? ToastWindow()
-        toastWindow = tw
-        tw.present(message: message, width: view.bounds.width, below: pop) { [weak self] in self?.onUndo?() }
     }
 
     /// "Copied /name" confirmation toast (no Undo) shown when you copy from the menu bar.
@@ -534,10 +493,10 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
             }
         }
         // Liquid Glass card: the row stack rides inside a glass effect view (rounded via
-        // cornerRadius; concentric corners return with the macOS 27 SDK — see GlassCardView).
+        // cornerRadius).
         let n = rows.count
         let h = CGFloat(n * 48 + max(0, n - 1))
-        let glass = GlassCardView()
+        let glass = NSGlassEffectView()
         glass.cornerRadius = 12
         glass.style = .regular
         glass.contentView = v
@@ -757,7 +716,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     }
 
     private static func looksLikeNaturalLanguage(_ s: String) -> Bool {
-        s.split(whereSeparator: { $0 == " " }).filter { !$0.isEmpty }.count >= 2
+        s.split(separator: " ").count >= 2
     }
 
     /// Ask the on-device model to rank skills for `q`, then re-reload with the ranking.
