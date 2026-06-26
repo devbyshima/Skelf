@@ -15,80 +15,17 @@ func skelfMono(_ style: NSFont.TextStyle, _ weight: NSFont.Weight = .medium) -> 
     NSFont.monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: style).pointSize, weight: weight)
 }
 
-// An opaque bento card: subtle fill + hairline border + concentric corner (content
-// surface — deliberately NOT Liquid Glass, which is reserved for the primary action).
-final class MetaCardView: NSView {
-    private let keyLabel = NSTextField(labelWithString: "")
-    private let valueLabel = NSTextField(labelWithString: "")
-
-    init(key: String, value: String, mono: Bool) {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 12
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        translatesAutoresizingMaskIntoConstraints = false
-
-        keyLabel.stringValue = key.uppercased()
-        keyLabel.font = skelfFont(.caption2, .semibold)
-        keyLabel.textColor = .tertiaryLabelColor
-        keyLabel.lineBreakMode = .byTruncatingTail
-        keyLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        valueLabel.stringValue = value
-        valueLabel.font = mono ? skelfMono(.callout, .regular) : skelfFont(.body)
-        valueLabel.textColor = .labelColor
-        valueLabel.lineBreakMode = mono ? .byTruncatingMiddle : .byTruncatingTail
-        valueLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        let stack = NSStackView(views: [keyLabel, valueLabel])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 4
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 56)
-        ])
-        keyLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-        valueLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-    }
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func updateLayer() {
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-    }
-}
-
 // MARK: - Detail screen
 
-// Split a SKILL.md into its YAML-ish frontmatter rows and the markdown body.
-func splitFrontmatter(_ text: String) -> (rows: [(String, String)], body: String) {
+// Strip a SKILL.md's YAML-ish frontmatter, returning just the markdown body.
+func splitFrontmatter(_ text: String) -> String {
     let lines = text.components(separatedBy: "\n")
-    guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return ([], text) }
+    guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return text }
     var i = 1
-    var rows: [(String, String)] = []
     while i < lines.count, lines[i].trimmingCharacters(in: .whitespaces) != "---" {
-        let line = lines[i]
-        if !line.hasPrefix(" "), !line.hasPrefix("\t"), let c = line.firstIndex(of: ":") {
-            let k = String(line[..<c]).trimmingCharacters(in: .whitespaces)
-            var v = String(line[line.index(after: c)...]).trimmingCharacters(in: .whitespaces)
-            if v == "|" || v == ">" { v = "" }
-            if (v.hasPrefix("\"") && v.hasSuffix("\"")) || (v.hasPrefix("'") && v.hasSuffix("'")), v.count >= 2 {
-                v = String(v.dropFirst().dropLast())
-            }
-            rows.append((k, v))
-        }
         i += 1
     }
-    let body = i + 1 < lines.count ? lines[(i + 1)...].joined(separator: "\n") : ""
-    return (rows, body)
+    return i + 1 < lines.count ? lines[(i + 1)...].joined(separator: "\n") : ""
 }
 
 // --- a small GitHub-flavoured markdown → NSAttributedString renderer (inline:

@@ -1,4 +1,4 @@
-// The bundle that holds Skelf's runtime resources (art-map.json, skelf.svg).
+// The bundle that holds Skelf's runtime resources (art-map.json, skelf-menubar.pdf).
 
 import Foundation
 

@@ -99,7 +99,7 @@ final class RippleBannerView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     // Drop-in for the calls the detail used on SkillArtView.
-    func setAvatar(_ image: NSImage, animated: Bool = false) { rippleModel.image = image }
+    func setAvatar(_ image: NSImage) { rippleModel.image = image }
     func setThemedFallback(_ skill: Skill) {
         let cg = SkillArtView.themedImage(skill)
         rippleModel.image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
