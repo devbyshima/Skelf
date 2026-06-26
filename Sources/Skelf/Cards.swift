@@ -95,28 +95,41 @@ final class SkillArtView: NSView {
     func setThemedFallback(_ skill: Skill) { imageLayer.contents = Self.themedImage(skill) }
     func setMosaic(_ cg: CGImage) { imageLayer.contents = cg }
 
-    // An album-cover-style 2×2 collage of a custom folder's skill art (over a gradient that
-    // shows through any empty quadrants).
-    static func mosaicImage(_ images: [CGImage], seed: String) -> CGImage {
+    // Shared 320×420 card-art canvas: lockFocus scaffold → CGImage. The `draw` closure does only
+    // the unique drawing for each generator.
+    private static func render(_ draw: (CGSize) -> Void) -> CGImage {
         let size = CGSize(width: 320, height: 420)
         let img = NSImage(size: size)
         img.lockFocus()
-        let cols = Palette.gradientColors(seed).compactMap { NSColor(cgColor: $0) }
-        if cols.count >= 2, let g = NSGradient(starting: cols[0], ending: cols[1]) {
-            g.draw(in: NSRect(origin: .zero, size: size), angle: 55)
-        }
-        let hw = size.width / 2, hh = size.height / 2
-        let quads = [NSRect(x: 0, y: hh, width: hw, height: hh), NSRect(x: hw, y: hh, width: hw, height: hh),
-                     NSRect(x: 0, y: 0, width: hw, height: hh), NSRect(x: hw, y: 0, width: hw, height: hh)]
-        // A single skill fills the whole tile; otherwise lay up to four into the quadrants.
-        if images.count == 1 {
-            drawAspectFill(images[0], in: NSRect(origin: .zero, size: size))
-        } else {
-            for (i, cg) in images.prefix(4).enumerated() { drawAspectFill(cg, in: quads[i]) }
-        }
+        draw(size)
         img.unlockFocus()
         var r = CGRect(origin: .zero, size: size)
         return img.cgImage(forProposedRect: &r, context: nil, hints: nil) ?? .empty
+    }
+
+    // The seed-derived two-stop gradient backdrop shared by the mosaic / themed / gradient cards.
+    private static func drawGradient(seed: String, angle: CGFloat, in size: CGSize) {
+        let cols = Palette.gradientColors(seed).compactMap { NSColor(cgColor: $0) }
+        if cols.count >= 2, let g = NSGradient(starting: cols[0], ending: cols[1]) {
+            g.draw(in: NSRect(origin: .zero, size: size), angle: angle)
+        }
+    }
+
+    // An album-cover-style 2×2 collage of a custom folder's skill art (over a gradient that
+    // shows through any empty quadrants).
+    static func mosaicImage(_ images: [CGImage], seed: String) -> CGImage {
+        render { size in
+            drawGradient(seed: seed, angle: 55, in: size)
+            let hw = size.width / 2, hh = size.height / 2
+            let quads = [NSRect(x: 0, y: hh, width: hw, height: hh), NSRect(x: hw, y: hh, width: hw, height: hh),
+                         NSRect(x: 0, y: 0, width: hw, height: hh), NSRect(x: hw, y: 0, width: hw, height: hh)]
+            // A single skill fills the whole tile; otherwise lay up to four into the quadrants.
+            if images.count == 1 {
+                drawAspectFill(images[0], in: NSRect(origin: .zero, size: size))
+            } else {
+                for (i, cg) in images.prefix(4).enumerated() { drawAspectFill(cg, in: quads[i]) }
+            }
+        }
     }
     private static func drawAspectFill(_ cg: CGImage, in rect: NSRect) {
         NSGraphicsContext.current?.saveGraphicsState()
@@ -134,23 +147,16 @@ final class SkillArtView: NSView {
     private static var themedCache: [String: CGImage] = [:]
     static func themedImage(_ skill: Skill) -> CGImage {
         if let c = themedCache[skill.id] { return c }
-        let size = CGSize(width: 320, height: 420)
-        let img = NSImage(size: size)
-        img.lockFocus()
-        let cols = Palette.gradientColors(skill.id).compactMap { NSColor(cgColor: $0) }
-        if cols.count >= 2, let g = NSGradient(starting: cols[0], ending: cols[1]) {
-            g.draw(in: NSRect(origin: .zero, size: size), angle: 55)
+        let cg = render { size in
+            drawGradient(seed: skill.id, angle: 55, in: size)
+            let cfg = NSImage.SymbolConfiguration(pointSize: size.width * 0.34, weight: .semibold)
+                .applying(.init(hierarchicalColor: .white))
+            if let icon = NSImage(systemSymbolName: artSymbol(for: skill), accessibilityDescription: nil)?
+                .withSymbolConfiguration(cfg) {
+                let p = NSPoint(x: (size.width - icon.size.width) / 2, y: size.height * 0.44)
+                icon.draw(at: p, from: .zero, operation: .sourceOver, fraction: 0.30)
+            }
         }
-        let cfg = NSImage.SymbolConfiguration(pointSize: size.width * 0.34, weight: .semibold)
-            .applying(.init(hierarchicalColor: .white))
-        if let icon = NSImage(systemSymbolName: artSymbol(for: skill), accessibilityDescription: nil)?
-            .withSymbolConfiguration(cfg) {
-            let p = NSPoint(x: (size.width - icon.size.width) / 2, y: size.height * 0.44)
-            icon.draw(at: p, from: .zero, operation: .sourceOver, fraction: 0.30)
-        }
-        img.unlockFocus()
-        var r = CGRect(origin: .zero, size: size)
-        let cg = img.cgImage(forProposedRect: &r, context: nil, hints: nil) ?? CGImage.empty
         themedCache[skill.id] = cg
         return cg
     }
@@ -160,45 +166,35 @@ final class SkillArtView: NSView {
     private static var favoritesCache: CGImage?
     static func favoritesImage() -> CGImage {
         if let c = favoritesCache { return c }
-        let size = CGSize(width: 320, height: 420)
-        let img = NSImage(size: size)
-        img.lockFocus()
-        let c0 = NSColor(calibratedRed: 1.00, green: 0.66, blue: 0.20, alpha: 1)   // amber
-        let c1 = NSColor(calibratedRed: 0.95, green: 0.26, blue: 0.46, alpha: 1)   // rose
-        if let g = NSGradient(starting: c0, ending: c1) { g.draw(in: NSRect(origin: .zero, size: size), angle: 62) }
-        let star = "★" as NSString
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: size.width * 0.62, weight: .black),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.22)]
-        let ss = star.size(withAttributes: attrs)
-        star.draw(at: NSPoint(x: (size.width - ss.width) / 2, y: size.height * 0.40), withAttributes: attrs)
-        img.unlockFocus()
-        var r = CGRect(origin: .zero, size: size)
-        favoritesCache = img.cgImage(forProposedRect: &r, context: nil, hints: nil)
-        return favoritesCache ?? CGImage.empty
+        let cg = render { size in
+            let c0 = NSColor(calibratedRed: 1.00, green: 0.66, blue: 0.20, alpha: 1)   // amber
+            let c1 = NSColor(calibratedRed: 0.95, green: 0.26, blue: 0.46, alpha: 1)   // rose
+            if let g = NSGradient(starting: c0, ending: c1) { g.draw(in: NSRect(origin: .zero, size: size), angle: 62) }
+            let star = "★" as NSString
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: size.width * 0.62, weight: .black),
+                .foregroundColor: NSColor.white.withAlphaComponent(0.22)]
+            let ss = star.size(withAttributes: attrs)
+            star.draw(at: NSPoint(x: (size.width - ss.width) / 2, y: size.height * 0.40), withAttributes: attrs)
+        }
+        favoritesCache = cg
+        return cg
     }
 
     static func gradientImage(_ name: String, monogram: Bool) -> CGImage {
         let key = name + (monogram ? "#m" : "")
         if let c = gradientCache[key] { return c }
-        let size = CGSize(width: 320, height: 420)
-        let img = NSImage(size: size)
-        img.lockFocus()
-        let cols = Palette.gradientColors(name).compactMap { NSColor(cgColor: $0) }
-        if cols.count >= 2, let g = NSGradient(starting: cols[0], ending: cols[1]) {
-            g.draw(in: NSRect(origin: .zero, size: size), angle: 55)
+        return render { size in
+            drawGradient(seed: name, angle: 55, in: size)
+            if monogram {
+                let initials = Palette.initials(name) as NSString
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.systemFont(ofSize: size.width * 0.46, weight: .heavy),
+                    .foregroundColor: NSColor.white.withAlphaComponent(0.17)]
+                let ss = initials.size(withAttributes: attrs)
+                initials.draw(at: NSPoint(x: (size.width - ss.width) / 2, y: size.height * 0.46), withAttributes: attrs)
+            }
         }
-        if monogram {
-            let initials = Palette.initials(name) as NSString
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: size.width * 0.46, weight: .heavy),
-                .foregroundColor: NSColor.white.withAlphaComponent(0.17)]
-            let ss = initials.size(withAttributes: attrs)
-            initials.draw(at: NSPoint(x: (size.width - ss.width) / 2, y: size.height * 0.46), withAttributes: attrs)
-        }
-        img.unlockFocus()
-        var r = CGRect(origin: .zero, size: size)
-        return img.cgImage(forProposedRect: &r, context: nil, hints: nil) ?? CGImage.empty
     }
 }
 
@@ -327,19 +323,54 @@ func makeGlassControls(_ circles: [GlassCircleButton], spacing: CGFloat = 7) -> 
 
 // MARK: - Grid tile (skill card — creator avatar background, product-card style)
 
-final class SkillGridItem: NSCollectionViewItem {
-    private let art = SkillArtView()
+// Shared card-tile behaviour: the art view, the hover-lift animation, and the selection
+// border — identical across skill and folder tiles. Subclasses build their own layout in
+// loadView, set artKey/onMenu, and override mouse tracking (pressPop stays per-subclass).
+class CardGridItem: NSCollectionViewItem {
+    let art = SkillArtView()
+    var hovering = false
+    var artKey = ""
+    var onMenu: ((NSView) -> Void)?
+
+    func resetHover() {
+        hovering = false
+        view.layer?.transform = CATransform3DIdentity
+        view.layer?.shadowOpacity = 0
+        view.layer?.zPosition = 0
+        art.resetZoom()
+    }
+    func applyHover() {
+        guard let l = view.layer else { return }
+        l.zPosition = hovering ? 1 : 0
+        NSAnimationContext.runAnimationGroup { ctx in
+            let springBack = !hovering && !AppSettings.shared.reduceMotion   // settle with a gentle overshoot on hover-out
+            ctx.duration = springBack ? 0.3 : 0.2
+            ctx.timingFunction = springBack
+                ? CAMediaTimingFunction(controlPoints: 0.34, 1.56, 0.64, 1)
+                : CAMediaTimingFunction(name: hovering ? .easeOut : .easeInEaseOut)
+            ctx.allowsImplicitAnimation = true
+            l.transform = hovering ? centerScale(l, 1.05) : CATransform3DIdentity
+            l.shadowOpacity = hovering ? 0.5 : 0.0
+        }
+        art.setHoverZoom(hovering)
+    }
+    override var isSelected: Bool {
+        didSet {
+            art.layer?.borderColor = NSColor.white.withAlphaComponent(0.9).cgColor
+            art.layer?.borderWidth = isSelected ? 2 : 0
+        }
+    }
+}
+
+final class SkillGridItem: CardGridItem {
     private var favCircle: GlassCircleButton!
     private var menuCircle: GlassCircleButton!
     private let nameLabel = NSTextField(labelWithString: "")
     private let descLabel = NSTextField(wrappingLabelWithString: "")
     private let copyButton = AnimatedButton()
-    private var hovering = false
-    private var artKey = ""
     private(set) var skillId = ""
     private var skill: Skill?            // for the Liquid Glass hover tip
     private var isFav = false
-    var onMenu: ((NSView) -> Void)?
     var onToggleFavorite: (() -> Void)?
     var onCopy: (() -> Void)?
 
@@ -504,13 +535,6 @@ final class SkillGridItem: NSCollectionViewItem {
 
     func pressPop() { SkillHoverTip.shared.cancel(); springPop(view.layer, from: 0.97) }
 
-    private func resetHover() {
-        hovering = false
-        view.layer?.transform = CATransform3DIdentity
-        view.layer?.shadowOpacity = 0
-        view.layer?.zPosition = 0
-        art.resetZoom()
-    }
     override func mouseEntered(with event: NSEvent) {
         hovering = true; applyHover()
         if let s = skill {
@@ -526,39 +550,14 @@ final class SkillGridItem: NSCollectionViewItem {
     }
     override func mouseMoved(with event: NSEvent) { SkillHoverTip.shared.update(cursor: NSEvent.mouseLocation) }
     override func mouseExited(with event: NSEvent) { hovering = false; applyHover(); SkillHoverTip.shared.cancel() }
-    private func applyHover() {
-        guard let l = view.layer else { return }
-        l.zPosition = hovering ? 1 : 0
-        NSAnimationContext.runAnimationGroup { ctx in
-            let springBack = !hovering && !AppSettings.shared.reduceMotion   // settle with a gentle overshoot on hover-out
-            ctx.duration = springBack ? 0.3 : 0.2
-            ctx.timingFunction = springBack
-                ? CAMediaTimingFunction(controlPoints: 0.34, 1.56, 0.64, 1)
-                : CAMediaTimingFunction(name: hovering ? .easeOut : .easeInEaseOut)
-            ctx.allowsImplicitAnimation = true
-            l.transform = hovering ? centerScale(l, 1.05) : CATransform3DIdentity
-            l.shadowOpacity = hovering ? 0.5 : 0.0
-        }
-        art.setHoverZoom(hovering)
-    }
-    override var isSelected: Bool {
-        didSet {
-            art.layer?.borderColor = NSColor.white.withAlphaComponent(0.9).cgColor
-            art.layer?.borderWidth = isSelected ? 2 : 0
-        }
-    }
 }
 
 // MARK: - Folder tile (same card shape, gradient + folder glyph)
 
-final class FolderGridItem: NSCollectionViewItem {
-    private let art = SkillArtView()
+final class FolderGridItem: CardGridItem {
     private let nameLabel = NSTextField(labelWithString: "")
     private let countLabel = NSTextField(labelWithString: "")
     private var menuCircle: GlassCircleButton!
-    private var hovering = false
-    private var artKey = ""
-    var onMenu: ((NSView) -> Void)?
 
     override func loadView() {
         let root = CardRootView()
@@ -668,36 +667,8 @@ final class FolderGridItem: NSCollectionViewItem {
     @objc private func menuClicked() { onMenu?(menuCircle) }
     func pressPop() { springPop(view.layer, from: 0.97) }
 
-    private func resetHover() {
-        hovering = false
-        view.layer?.transform = CATransform3DIdentity
-        view.layer?.shadowOpacity = 0
-        view.layer?.zPosition = 0
-        art.resetZoom()
-    }
     override func mouseEntered(with event: NSEvent) { hovering = true; applyHover() }
     override func mouseExited(with event: NSEvent) { hovering = false; applyHover() }
-    private func applyHover() {
-        guard let l = view.layer else { return }
-        l.zPosition = hovering ? 1 : 0
-        NSAnimationContext.runAnimationGroup { ctx in
-            let springBack = !hovering && !AppSettings.shared.reduceMotion   // settle with a gentle overshoot on hover-out
-            ctx.duration = springBack ? 0.3 : 0.2
-            ctx.timingFunction = springBack
-                ? CAMediaTimingFunction(controlPoints: 0.34, 1.56, 0.64, 1)
-                : CAMediaTimingFunction(name: hovering ? .easeOut : .easeInEaseOut)
-            ctx.allowsImplicitAnimation = true
-            l.transform = hovering ? centerScale(l, 1.05) : CATransform3DIdentity
-            l.shadowOpacity = hovering ? 0.5 : 0.0
-        }
-        art.setHoverZoom(hovering)
-    }
-    override var isSelected: Bool {
-        didSet {
-            art.layer?.borderColor = NSColor.white.withAlphaComponent(0.9).cgColor
-            art.layer?.borderWidth = isSelected ? 2 : 0
-        }
-    }
 }
 
 // MARK: - Detail screen

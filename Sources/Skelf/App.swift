@@ -356,7 +356,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             ctrl.onRefresh = { [weak self] in self?.reloadFromDisk(auto: false) }
             ctrl.onSettings = { [weak self] in self?.popover.performClose(nil); self?.openSettings() }
             ctrl.onQuit = { [weak self] in self?.quitCompletely() }
-            ctrl.onUndo = { [weak self] in self?.undoManager.undo() }
             popoverController = ctrl
         }
 

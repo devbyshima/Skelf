@@ -94,10 +94,7 @@ enum Updater {
                 return done(nil, "Couldn’t read the release feed.")
             }
             func assetURL(_ name: String) -> URL? {
-                for a in assets where (a["name"] as? String) == name {
-                    if let s = a["browser_download_url"] as? String { return URL(string: s) }
-                }
-                return nil
+                return (assets.first { ($0["name"] as? String) == name }?["browser_download_url"] as? String).flatMap(URL.init(string:))
             }
             guard let dmg = assetURL("Skelf.dmg") else {
                 return done(nil, "The latest release has no Skelf.dmg to download.")
@@ -260,15 +257,12 @@ enum Updater {
     }
 
     private static func info(_ title: String, _ message: String) {
-        let show = {
-            NSApp.activate(ignoringOtherApps: true)
-            let a = NSAlert()
-            a.messageText = title
-            a.informativeText = message
-            a.addButton(withTitle: "OK")
-            a.runModal()
-        }
-        if Thread.isMainThread { show() } else { DispatchQueue.main.async(execute: show) }
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = title
+        a.informativeText = message
+        a.addButton(withTitle: "OK")
+        a.runModal()
     }
 
     private static func sha256(ofFileAt path: String) -> String? {

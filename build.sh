@@ -43,9 +43,8 @@ PLIST
 # Runtime resources live with the target (Sources/Skelf/Resources/) so SwiftPM/Xcode bundle
 # them too (Bundle.module); build.sh copies them into Skelf.app (Bundle.main). See Bundle+Skelf.swift.
 RUNRES="$SRCDIR/Resources"
-# Menu-bar icon: the Skelf mark as a vector PDF template (loaded at runtime; skelf.svg is its
-# source, kept alongside for regeneration). The PDF is what the status item actually uses.
-[ -f "$RUNRES/skelf.svg" ] && cp "$RUNRES/skelf.svg" "$APP/Contents/Resources/skelf.svg"
+# Menu-bar icon: the Skelf mark as a vector PDF template (loaded at runtime). skelf.svg is its
+# source, kept in the source tree for regeneration but not bundled.
 [ -f "$RUNRES/skelf-menubar.pdf" ] && cp "$RUNRES/skelf-menubar.pdf" "$APP/Contents/Resources/skelf-menubar.pdf"
 # Per-skill public-domain painting map (skill id → artwork URL); optional — the app
 # generates a themed fallback for any skill not listed.
@@ -73,8 +72,6 @@ fi
 echo "Compiling ($ARCH)…"
 swiftc -O -swift-version 5 -parse-as-library \
   -target "${ARCH}-apple-macosx26.0" \
-  -framework AppKit -framework QuartzCore -framework CoreServices -framework CryptoKit \
-  -framework FoundationModels \
   "${PLUGIN_ARGS[@]}" \
   "$SRCDIR"/*.swift \
   -o "$APP/Contents/MacOS/Skelf"

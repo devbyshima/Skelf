@@ -265,7 +265,7 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
     /// Called by the SwiftUI host whenever search / data changes. (CardFlowLayout
     /// handles responsive resizing itself, live, via shouldInvalidateLayout.)
     private var lastFavToken = -1
-    func apply(query: String, filter: Int, token: Int, favToken: Int) {
+    func apply(query: String, token: Int, favToken: Int) {
         let favChanged = favToken != lastFavToken
         // A favorite toggle must REBUILD when the favorites set is what's on screen — the
         // home grid (its Favorites count card) or the Favorites folder itself — but only
@@ -391,7 +391,7 @@ final class GridViewController: NSViewController, NSCollectionViewDataSource,
     // A query is "natural language" (worth an AI pass) once it's more than one word — a
     // bare token like "auth" stays a fast literal lookup.
     private static func looksLikeNaturalLanguage(_ s: String) -> Bool {
-        s.split(whereSeparator: { $0 == " " }).filter { !$0.isEmpty }.count >= 2
+        s.split(separator: " ").count >= 2
     }
 
     /// Ask the on-device model to rank skills for `q`; on success, cache the ranking and

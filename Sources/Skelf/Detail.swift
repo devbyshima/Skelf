@@ -9,14 +9,9 @@ import ServiceManagement
 import Carbon.HIToolbox
 
 final class SkillDetailView: NSView {
-    var onBack: (() -> Void)?
     var onCopy: ((Skill) -> Void)?
     private var skill: Skill?
     private var artToken = 0
-
-    private let backBar = NSView()
-    private let topDivider = NSBox()
-    private var backBarHeight: NSLayoutConstraint!
 
     private let banner = RippleBannerView()
     private let bannerName = NSTextField(labelWithString: "")
@@ -40,27 +35,7 @@ final class SkillDetailView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func setShowsBackBar(_ show: Bool) {
-        backBar.isHidden = !show
-        topDivider.isHidden = !show
-        backBarHeight.constant = show ? 40 : 0
-    }
-
     private func build() {
-        backBar.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(backBar)
-        let back = NSButton(title: "All skills", target: self, action: #selector(backTapped))
-        back.image = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Back")
-        back.imagePosition = .imageLeading
-        back.bezelStyle = .recessed; back.isBordered = false
-        back.contentTintColor = .controlAccentColor
-        back.font = skelfFont(.callout, .medium)
-        back.translatesAutoresizingMaskIntoConstraints = false
-        backBar.addSubview(back)
-        topDivider.boxType = .separator
-        topDivider.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(topDivider)
-
         banner.translatesAutoresizingMaskIntoConstraints = false
         addSubview(banner)
         banner.toolTip = "Click to view the full image"
@@ -238,19 +213,8 @@ final class SkillDetailView: NSView {
         sidebarStack.translatesAutoresizingMaskIntoConstraints = false
         sideDoc.addSubview(sidebarStack)
 
-        backBarHeight = backBar.heightAnchor.constraint(equalToConstant: 40)
         NSLayoutConstraint.activate([
-            backBar.topAnchor.constraint(equalTo: topAnchor),
-            backBar.leadingAnchor.constraint(equalTo: leadingAnchor),
-            backBar.trailingAnchor.constraint(equalTo: trailingAnchor),
-            backBarHeight,
-            back.leadingAnchor.constraint(equalTo: backBar.leadingAnchor, constant: 12),
-            back.centerYAnchor.constraint(equalTo: backBar.centerYAnchor),
-            topDivider.topAnchor.constraint(equalTo: backBar.bottomAnchor),
-            topDivider.leadingAnchor.constraint(equalTo: leadingAnchor),
-            topDivider.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            banner.topAnchor.constraint(equalTo: topAnchor),   // fill to the very top (the back bar is never shown)
+            banner.topAnchor.constraint(equalTo: topAnchor),   // fill to the very top
             banner.leadingAnchor.constraint(equalTo: leadingAnchor),
             banner.trailingAnchor.constraint(equalTo: trailingAnchor),
             banner.heightAnchor.constraint(equalToConstant: 230),
@@ -423,7 +387,7 @@ final class SkillDetailView: NSView {
             let mdPath = skill.skillMDPath
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let raw = (try? String(contentsOfFile: mdPath, encoding: .utf8)) ?? ""
-                let (_, body) = splitFrontmatter(raw)
+                let body = splitFrontmatter(raw)
                 let bodyTrim = body.trimmingCharacters(in: .whitespacesAndNewlines)
                 let attr = bodyTrim.isEmpty
                     ? NSAttributedString(string: "This skill's SKILL.md has no content beyond its frontmatter.",
@@ -629,7 +593,6 @@ final class SkillDetailView: NSView {
         c.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor).isActive = true
     }
 
-    @objc private func backTapped() { onBack?() }
     @objc private func copySlashTapped() {
         guard let s = skill else { return }
         onCopy?(s)
