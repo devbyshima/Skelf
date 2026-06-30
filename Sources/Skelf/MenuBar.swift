@@ -310,6 +310,12 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
 
         let clip = scroll.contentView
         NSLayoutConstraint.activate([
+            // Hard-lock the popover width so content never changes it. `preferredContentSize`
+            // (set in resizeToFit) only *prefers* 320; without this, a long skill/folder name
+            // whose label won't compress lets the popover widen to fit. With the width pinned,
+            // those labels truncate instead and the popover stays a constant width.
+            root.widthAnchor.constraint(equalToConstant: 320),
+
             leftStack.topAnchor.constraint(equalTo: root.topAnchor, constant: 18),
             leftStack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             leftStack.trailingAnchor.constraint(lessThanOrEqualTo: windowButton.leadingAnchor, constant: -8),
@@ -521,6 +527,11 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         glass.contentView = v
         glass.translatesAutoresizingMaskIntoConstraints = false
         glass.heightAnchor.constraint(equalToConstant: h).isActive = true
+        // Bind the row stack to the glass width so the rows (and their truncating labels) are
+        // actually bounded — otherwise a long name lets the inner stack, and the popover, grow.
+        let vWidth = v.widthAnchor.constraint(equalTo: glass.widthAnchor)
+        vWidth.priority = .required - 1
+        vWidth.isActive = true
         return glass
     }
 
@@ -536,11 +547,18 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         let t = NSTextField(labelWithString: title)
         t.font = .systemFont(ofSize: 13, weight: .semibold)
         t.lineBreakMode = .byTruncatingTail
+        t.usesSingleLineMode = true
+        t.cell?.truncatesLastVisibleLine = true
+        // Yield width and truncate with "…"; never grow the row to fit a long name.
+        t.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         if dim { t.textColor = .secondaryLabelColor }
         let s = NSTextField(labelWithString: subtitle)
         s.font = .systemFont(ofSize: 11)
         s.textColor = .secondaryLabelColor
         s.lineBreakMode = .byTruncatingTail
+        s.usesSingleLineMode = true
+        s.cell?.truncatesLastVisibleLine = true
+        s.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let text = NSStackView(views: [t, s])
         text.orientation = .vertical
         text.spacing = 1
