@@ -211,6 +211,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
     private var aiRanked: (query: String, ids: [String])?
     private var pendingRankQuery: String?
     private var rankTask: Task<Void, Never>?
+    private var searchReloadWork: DispatchWorkItem?   // debounces the per-keystroke results rebuild
 
     private let titleLabel = NSTextField(labelWithString: "Skelf")
     private let backButton = NSButton()
@@ -236,6 +237,7 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         searchField.stringValue = ""
         aiRanked = nil; pendingRankQuery = nil
         rankTask?.cancel(); rankTask = nil
+        searchReloadWork?.cancel(); searchReloadWork = nil
         toastWindow?.dismiss()
     }
 
@@ -373,6 +375,23 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
         super.viewDidAppear()
         view.window?.makeFirstResponder(searchField)   // focus search, no stray focus glow
         SkillFinder.shared.prewarm()                    // warm the on-device model for a snappy first query
+    }
+
+    /// Type a literal Space into Search at the cursor. The status-item button would otherwise
+    /// steal the Space key (NSButton treats Space/Return as a click) and toggle the popover shut,
+    /// so AppDelegate's key monitor swallows Space and calls this instead. If Search isn't already
+    /// focused, claim focus — but that selects all its text, so collapse the selection to the end
+    /// first; otherwise the inserted space would replace everything you'd typed.
+    func insertSpaceInSearch() {
+        if searchField.currentEditor() == nil {
+            view.window?.makeFirstResponder(searchField)
+            if let editor = searchField.currentEditor() as? NSTextView {
+                editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+            }
+        }
+        if let editor = searchField.currentEditor() as? NSTextView {
+            editor.insertText(" ", replacementRange: editor.selectedRange())
+        }
     }
 
     func reload() {
@@ -744,7 +763,13 @@ final class PopoverListController: NSViewController, NSSearchFieldDelegate {
             if SkillFinder.shared.isAvailable && !new.isEmpty { SkillFinder.shared.prewarm() }
         }
         query = new
-        reload()
+        // Rebuilding the results (Liquid-Glass cards + layout) is heavy enough that doing it on
+        // every keystroke stalls the field editor's redraw, so typed characters appear late.
+        // Debounce it: the field updates instantly; the list refreshes a beat after typing pauses.
+        searchReloadWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.reload() }
+        searchReloadWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 }
 
