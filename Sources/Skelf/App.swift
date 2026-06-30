@@ -123,8 +123,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     // Route the Edit ▸ Undo/Redo (and Cmd-Z) to the folder tree's undo manager.
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { undoManager }
 
-    // When the menu-bar popover collapses, dismiss its detached toast too.
-    func popoverDidClose(_ notification: Notification) { popoverController?.dismissToast() }
+    private var dismissMonitors: [Any] = []
+
+    // Event monitors that run only while the popover is open. They replace `.transient`'s
+    // automatic dismissal, which we dropped because the status-item button stole the Space key
+    // (an NSButton treats Space/Return as a click): pressing Space re-fired the button's action
+    // and closed the popover instead of typing into Search. With `.applicationDefined` behavior
+    // we own dismissal — click-away here, plus the key handling that lets Space reach the field.
+    private func installDismissMonitors() {
+        removeDismissMonitors()
+        // A click in another application → dismiss.
+        if let g = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
+            self?.popover.performClose(nil)
+        }) {
+            dismissMonitors.append(g)
+        }
+        // A click in this app outside the popover → dismiss. The status-item button is exempt:
+        // its own action toggles the popover, so letting the monitor also close it would race
+        // (close-then-reopen). Clicks inside the popover are left alone. Require a real target
+        // window so synthesized window-less events can't trip the dismissal.
+        if let l = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] e in
+            guard let self = self else { return e }
+            let popWin = self.popover.contentViewController?.view.window
+            let statusWin = self.statusItem.button?.window
+            if let w = e.window, w !== popWin, w !== statusWin { self.popover.performClose(nil) }
+            return e
+        }) {
+            dismissMonitors.append(l)
+        }
+        // Key handling for the open popover: Escape closes it; Space/Return are routed to the
+        // Search field ourselves so the status-item button can't steal them (see above) — Space
+        // types a space, Return is a no-op. Every other key passes straight through to the editor.
+        if let k = NSEvent.addLocalMonitorForEvents(matching: [.keyDown], handler: { [weak self] e in
+            guard let self = self, self.popover.isShown else { return e }
+            if e.keyCode == 53 { self.popover.performClose(nil); return nil }   // 53 = Escape → close
+            // Space (49) and Return (36) are "click" keys for an NSButton, so the status-item
+            // button steals them — pressing Space performClicks it and toggles the popover shut
+            // before the keystroke reaches Search. Swallow them unconditionally while the popover
+            // is open, and route Space into the Search field ourselves (Return is a no-op). Every
+            // other key passes straight through to the field editor.
+            if e.keyCode == 49 || e.keyCode == 36 {
+                if e.keyCode == 49 { (self.popover.contentViewController as? PopoverListController)?.insertSpaceInSearch() }
+                return nil
+            }
+            return e
+        }) {
+            dismissMonitors.append(k)
+        }
+    }
+
+    private func removeDismissMonitors() {
+        dismissMonitors.forEach { NSEvent.removeMonitor($0) }
+        dismissMonitors.removeAll()
+    }
+
+    // When the menu-bar popover collapses, tear down its click-away monitors and its toast.
+    func popoverDidClose(_ notification: Notification) {
+        removeDismissMonitors()
+        popoverController?.dismissToast()
+    }
+
+    // Switching to another app dismisses the popover too (matches the old transient behavior).
+    func applicationDidResignActive(_ n: Notification) {
+        if popover.isShown { popover.performClose(nil) }
+    }
 
     private func setupMainMenu() {
         let main = NSMenu()
@@ -360,11 +422,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         }
 
         popover.contentViewController = ctrl
-        popover.behavior = .transient
+        // `.applicationDefined`, not `.transient`: the transient behavior's private auto-dismiss
+        // monitor was closing the popover on the Space key while typing in Search. We close it
+        // ourselves instead — see installDismissMonitors() for the click-away handling.
+        popover.behavior = .applicationDefined
         ctrl.prepareForShow()
         ctrl.reload()   // sets preferredContentSize -> popover sizes to fit
         if let button = statusItem.button {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            installDismissMonitors()
         }
     }
 
