@@ -135,8 +135,31 @@ struct SettingsPane: View {
             check("On-Device AI Search", "Find skills by what they do — type a task in plain words — and show plain-English summaries. Runs entirely on-device via Apple Intelligence; needs a supported Mac and falls back to plain search when unavailable.", $settings.useAIFeatures)
         case .updates:
             check("Automatically Check for Updates", "Look for a newer Skelf on launch and once a day.", $settings.autoCheckUpdates)
-            actionRow("Check for Updates", "You’re on Skelf \(skelfShortVersion).", button: "Check Now", disabled: false) {
+            check("Include Beta Releases", "Get pre-release builds early. Betas are stabilizing toward the next version — expect rough edges, and report what you find.", $settings.betaChannel)
+            actionRow("Check for Updates", "You’re on Skelf \(skelfShortVersion) (\(skelfReleaseChannel.label)).", button: "Check Now", disabled: false) {
                 NSApp.sendAction(#selector(AppDelegate.checkForUpdates), to: nil, from: nil)
+            }
+            if skelfReleaseChannel != .production { featureFlagSection }
+        }
+    }
+
+    /// Feature flags, listed only in dev/beta builds — production users never see in-flight work.
+    /// Each row pins the flag on or off; the caption says what it would do on its own.
+    @ViewBuilder private var featureFlagSection: some View {
+        Divider()
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Feature Flags").font(.headline)
+            if FeatureFlags.all.isEmpty {
+                caption("No feature flags are declared in this build.")
+            } else {
+                ForEach(FeatureFlags.all) { flag in
+                    check(flag.title,
+                          FeatureFlags.hasOverride(flag)
+                              ? flag.summary + " (pinned — delete flag.\(flag.name) to restore the default)"
+                              : flag.summary,
+                          Binding(get: { FeatureFlags.isOn(flag.name) },
+                                  set: { FeatureFlags.setOverride($0, for: flag) }))
+                }
             }
         }
     }

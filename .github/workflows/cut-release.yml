@@ -7,6 +7,14 @@ name: Cut Release
 #
 # Normal flow: land changes (accumulating notes under "## [Unreleased]" in CHANGELOG.md), run
 # this when you want to ship, review the PR, merge it.
+#
+# WHEN TO USE THIS vs. the release-branch flow (RELEASING.md):
+#   • This workflow ships straight off main, with no beta. Keep it for a small patch when no
+#     `release/X.Y` branch is open and the change doesn't warrant a stabilization period.
+#   • For anything that should get a beta first — every minor and major — use Cut Release Branch
+#     (cut-release-branch.yml) instead, and promote the branch with a `vX.Y.Z` tag.
+#   • Never run this while a release branch for the SAME version is open: main and the branch
+#     would both try to claim that version's tag.
 
 on:
   workflow_dispatch:
