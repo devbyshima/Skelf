@@ -35,7 +35,9 @@ enum Updater {
 
     // MARK: - Check
 
-    private static var currentVersion: [Int]? { semver(skelfShortVersion) }
+    private static var currentVersion: Precedence? {
+        semver(skelfShortVersion) == nil ? nil : semverPrecedence(skelfShortVersion)
+    }
 
     private static func check(silent: Bool) {
         guard !inFlight else { return }
@@ -52,11 +54,11 @@ enum Updater {
                     if !silent { info("Couldn’t check for updates", errorMessage ?? "Couldn’t reach GitHub.") }
                     return
                 }
-                guard let latest = semver(rel.version) else {
+                guard semver(rel.version) != nil else {
                     if !silent { info("Couldn’t check for updates", "The latest release has an unexpected version (\(rel.version)).") }
                     return
                 }
-                if compare(latest, current) > 0 {
+                if compare(semverPrecedence(rel.version), current) > 0 {
                     if silent && UserDefaults.standard.string(forKey: skipVersionKey) == rel.version { return }
                     promptUpdate(rel)
                 } else if !silent {
@@ -76,8 +78,14 @@ enum Updater {
         let sums: URL?
     }
 
+    /// On the stable channel: `/releases/latest`, which GitHub defines as the newest NON-prerelease
+    /// release. On the beta channel: the `/releases` list, from which we take the highest version
+    /// by SemVer precedence — pre-releases included — so beta users lead production users but are
+    /// still moved onto the final build once it ships (1.6.0 outranks 1.6.0-beta.2).
     private static func fetchLatest(_ done: @escaping (Release?, String?) -> Void) {
-        let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases/latest")!
+        let beta = AppSettings.shared.betaChannel
+        let path = beta ? "releases?per_page=30" : "releases/latest"
+        let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/\(path)")!
         var req = URLRequest(url: url)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("Skelf/\(skelfShortVersion)", forHTTPHeaderField: "User-Agent")
@@ -88,23 +96,37 @@ enum Updater {
             guard http.statusCode == 200, let data = data else {
                 return done(nil, "GitHub returned HTTP \(http.statusCode).")
             }
-            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tag = obj["tag_name"] as? String,
-                  let assets = obj["assets"] as? [[String: Any]] else {
-                return done(nil, "Couldn’t read the release feed.")
+            let json = try? JSONSerialization.jsonObject(with: data)
+            // One object on the stable path, an array on the beta path — normalize to a list.
+            let objs: [[String: Any]]
+            if beta {
+                guard let list = json as? [[String: Any]] else { return done(nil, "Couldn’t read the release feed.") }
+                objs = list.filter { ($0["draft"] as? Bool) != true }
+            } else {
+                guard let one = json as? [String: Any] else { return done(nil, "Couldn’t read the release feed.") }
+                objs = [one]
             }
-            func assetURL(_ name: String) -> URL? {
-                return (assets.first { ($0["name"] as? String) == name }?["browser_download_url"] as? String).flatMap(URL.init(string:))
+            let releases = objs.compactMap(parse)
+            guard let best = releases.max(by: { compare(semverPrecedence($0.version), semverPrecedence($1.version)) < 0 }) else {
+                return done(nil, beta ? "No published release has a Skelf.dmg to download."
+                                      : "The latest release has no Skelf.dmg to download.")
             }
-            guard let dmg = assetURL("Skelf.dmg") else {
-                return done(nil, "The latest release has no Skelf.dmg to download.")
-            }
-            let page = (obj["html_url"] as? String).flatMap(URL.init)
-                ?? URL(string: "https://github.com/\(owner)/\(repo)/releases/latest")!
-            done(Release(version: tag.hasPrefix("v") ? String(tag.dropFirst()) : tag,
-                         notes: (obj["body"] as? String) ?? "",
-                         page: page, dmg: dmg, sums: assetURL("SHA256SUMS")), nil)
+            done(best, nil)
         }.resume()
+    }
+
+    /// One release JSON object → a `Release`, or nil when it carries no downloadable DMG.
+    private static func parse(_ obj: [String: Any]) -> Release? {
+        guard let tag = obj["tag_name"] as? String, let assets = obj["assets"] as? [[String: Any]] else { return nil }
+        func assetURL(_ name: String) -> URL? {
+            (assets.first { ($0["name"] as? String) == name }?["browser_download_url"] as? String).flatMap(URL.init(string:))
+        }
+        guard let dmg = assetURL("Skelf.dmg") else { return nil }
+        let page = (obj["html_url"] as? String).flatMap(URL.init)
+            ?? URL(string: "https://github.com/\(owner)/\(repo)/releases/latest")!
+        return Release(version: tag.hasPrefix("v") ? String(tag.dropFirst()) : tag,
+                       notes: (obj["body"] as? String) ?? "",
+                       page: page, dmg: dmg, sums: assetURL("SHA256SUMS"))
     }
 
     // MARK: - Prompt
@@ -288,11 +310,40 @@ enum Updater {
         return parts.map { $0! }
     }
 
-    private static func compare(_ a: [Int], _ b: [Int]) -> Int {
-        for i in 0..<max(a.count, b.count) {
-            let x = i < a.count ? a[i] : 0, y = i < b.count ? b[i] : 0
+    /// A version split for SemVer precedence: the numeric core plus its pre-release identifiers.
+    private struct Precedence {
+        let core: [Int]
+        let pre: [String]      // empty for a final release
+    }
+
+    /// Split `1.6.0-beta.1` into core `[1, 6, 0]` and pre-release `["beta", "1"]`. A version whose
+    /// core doesn't parse gets core `[]`, which ranks below everything — it never wins a `max`.
+    private static func semverPrecedence(_ s: String) -> Precedence {
+        let parts = s.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        let pre = parts.count > 1 ? String(parts[1]) : ""
+        return Precedence(core: semver(s) ?? [],
+                          pre: pre.isEmpty ? [] : pre.split(separator: ".").map(String.init))
+    }
+
+    /// SemVer §11 precedence. Beyond the numeric core: a pre-release ranks BELOW the same core
+    /// without one (1.6.0-beta.2 < 1.6.0), numeric identifiers compare numerically (beta.9 <
+    /// beta.10), numeric ranks below alphanumeric, and a longer identifier list wins a tie.
+    private static func compare(_ a: Precedence, _ b: Precedence) -> Int {
+        for i in 0..<max(a.core.count, b.core.count) {
+            let x = i < a.core.count ? a.core[i] : 0, y = i < b.core.count ? b.core[i] : 0
             if x != y { return x < y ? -1 : 1 }
         }
+        if a.pre.isEmpty != b.pre.isEmpty { return a.pre.isEmpty ? 1 : -1 }
+        for i in 0..<min(a.pre.count, b.pre.count) {
+            let x = a.pre[i], y = b.pre[i]
+            if x == y { continue }
+            let xn = Int(x), yn = Int(y)
+            if let xn = xn, let yn = yn { return xn < yn ? -1 : 1 }
+            if xn != nil { return -1 }       // numeric identifiers rank below alphanumeric ones
+            if yn != nil { return 1 }
+            return x < y ? -1 : 1
+        }
+        if a.pre.count != b.pre.count { return a.pre.count < b.pre.count ? -1 : 1 }
         return 0
     }
 

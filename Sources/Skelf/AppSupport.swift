@@ -149,6 +149,7 @@ final class AppSettings {
         static let appearance = "appearance", globalHotKey = "globalHotKeyEnabled"
         static let autoCheckUpdates = "autoCheckUpdates"
         static let aiFeatures = "aiFeaturesEnabled"
+        static let betaChannel = "betaChannelEnabled"
     }
 
     private var applyingLogin = false
@@ -191,6 +192,12 @@ final class AppSettings {
     var autoCheckUpdates: Bool {
         didSet { UserDefaults.standard.set(autoCheckUpdates, forKey: Keys.autoCheckUpdates) }
     }
+    /// Opt in to the beta channel: offer pre-release builds (`vX.Y.Z-beta.N`, cut from a
+    /// `release/X.Y` branch) as well as stable ones. Defaults on for a build that IS a beta, so a
+    /// beta tester keeps getting betas without having to find this switch. See RELEASING.md.
+    var betaChannel: Bool {
+        didSet { UserDefaults.standard.set(betaChannel, forKey: Keys.betaChannel) }
+    }
     /// Use Apple's on-device model (Foundation Models) for natural-language skill search and
     /// plain-English summaries. Honored only on capable hardware; see SkillFinder.isAvailable.
     var useAIFeatures: Bool {
@@ -208,6 +215,8 @@ final class AppSettings {
         globalHotKey = (UserDefaults.standard.object(forKey: Keys.globalHotKey) as? Bool) ?? true
         autoCheckUpdates = (UserDefaults.standard.object(forKey: Keys.autoCheckUpdates) as? Bool) ?? true
         useAIFeatures = (UserDefaults.standard.object(forKey: Keys.aiFeatures) as? Bool) ?? true
+        betaChannel = (UserDefaults.standard.object(forKey: Keys.betaChannel) as? Bool)
+            ?? (skelfReleaseChannel != .production)
     }
 
     func applyMenuBarOnly() {

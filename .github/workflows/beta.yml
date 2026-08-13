@@ -1,0 +1,126 @@
+name: Beta
+
+# The BETA channel. Every push to a `release/X.Y` stabilization branch builds Skelf.app, packages
+# Skelf.dmg + SHA256SUMS, tags the next pre-release (`vX.Y.Z-beta.N`) and publishes it as a GitHub
+# *pre-release* — so it never becomes the repo's "Latest release" and only users who ticked
+# Settings ▸ Updates ▸ "Include Beta Releases" are offered it.
+#
+# Where this sits in the flow (full walkthrough in RELEASING.md):
+#
+#   main ──cut─▶ release/X.Y ──push─▶ THIS (vX.Y.Z-beta.N, beta channel)
+#                     │
+#                     └──promote: `git tag -a vX.Y.Z` by hand ─▶ release.yml (production channel)
+#
+# The version comes from `SKELF_VERSION` in build.sh on the branch — the same source of truth
+# production uses. N is simply the next unused beta number for that version.
+#
+# Beta builds are stamped with SKELF_CHANNEL=beta via build.sh's *_OVERRIDE env vars, so nothing
+# is committed to bump a beta and the branch's build.sh keeps holding the version being stabilized.
+
+on:
+  push:
+    branches: ['release/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # tag + create the pre-release
+
+concurrency:
+  group: beta-${{ github.ref }}
+  cancel-in-progress: false   # never cancel a half-published release
+
+jobs:
+  beta:
+    name: Build & publish beta
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need every tag to work out the next beta number
+
+      - name: Resolve the next beta version
+        id: v
+        run: |
+          set -euo pipefail
+          version=$(grep -E '^SKELF_VERSION=' build.sh | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
+          if [ -z "$version" ]; then echo "::error::Couldn't read SKELF_VERSION from build.sh"; exit 1; fi
+          # A shipped version can't have new betas — bump the patch on this branch first.
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "::error::v$version is already released. Bump SKELF_VERSION in build.sh on this branch (e.g. to the next patch) before publishing another beta."
+            exit 1
+          fi
+          n=0
+          for t in $(git tag -l "v$version-beta.*"); do
+            m="${t##*.}"
+            case "$m" in ''|*[!0-9]*) continue ;; esac
+            # `if`, not `[ … ] && …`: under `set -e` a false test as the loop's last command
+            # would make the whole `for` exit non-zero and kill the step.
+            if [ "$m" -gt "$n" ]; then n="$m"; fi
+          done
+          n=$((n + 1))
+          {
+            echo "version=$version"
+            echo "full=$version-beta.$n"
+            echo "tag=v$version-beta.$n"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Select latest Xcode
+        # Skelf targets macOS 26 / Liquid Glass, so it needs the macOS 26 SDK (Xcode 26+).
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build Skelf.app (beta channel)
+        env:
+          SKELF_VERSION_OVERRIDE: ${{ steps.v.outputs.full }}
+          SKELF_CHANNEL: beta
+        run: ./build.sh
+
+      - name: Build DMG + checksum
+        run: ./scripts/make-dmg.sh
+
+      - name: Extract release notes from CHANGELOG
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          FULL: ${{ steps.v.outputs.full }}
+        run: |
+          set -euo pipefail
+          # On a release branch the notes usually still sit under "## [Unreleased]"; once the
+          # promote PR lands they've moved under "## [X.Y.Z]". Prefer the version section.
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" {f=1; next}
+            f && /^## \[/ {exit}
+            f {print}
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            awk '/^## \[Unreleased\]/ {f=1; next} f && /^## \[/ {exit} f {print}' CHANGELOG.md > RELEASE_NOTES.md
+          fi
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "**Beta \`$FULL\`** — stabilizing toward \`$VERSION\`. Expect rough edges; please report anything you hit."
+            echo "Enable Settings ▸ Updates ▸ *Include Beta Releases* to keep getting these automatically."
+          } >> RELEASE_NOTES.md
+
+      - name: Tag the beta
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Skelf $TAG"
+          git push origin "refs/tags/$TAG"   # GITHUB_TOKEN tag push won't re-trigger release.yml
+
+      - name: Publish the pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.v.outputs.tag }}
+          name: ${{ steps.v.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          prerelease: true              # keeps it off "Latest release" and out of /releases/latest
+          fail_on_unmatched_files: true
+          files: |
+            Skelf.dmg
+            SHA256SUMS
