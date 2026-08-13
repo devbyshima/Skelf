@@ -6,7 +6,13 @@ name: Release
 #   • Merge a "Release X.Y.Z" PR (opened by cut-release.yml). The merge pushes to main; the
 #     `resolve` job sees build.sh's version has no tag yet, tags it, and `publish` ships it.
 #     Triggered by your merge (a push event), so it's never gated behind "action_required".
-#   • Push a SemVer tag by hand (e.g. `git tag -a v1.0.0 -m … && git push origin v1.0.0`).
+#   • Push a SemVer tag by hand (e.g. `git tag -a v1.0.0 -m … && git push origin v1.0.0`). This is
+#     the PRODUCTION channel's entry point in the branch-based flow: you tag `vX.Y.Z` on a
+#     `release/X.Y` branch to promote a beta, or to ship a hotfix. See RELEASING.md.
+#
+# The auto-tag path is main-only by construction (`branches: [main]` below) — pushes to
+# `release/*` are beta.yml's job, and a release branch merged back into main can't double-release
+# because its version is already tagged, so `resolve` skips it.
 #
 # Builds are UNSIGNED (ad-hoc) — no Developer ID / notarization. Users approve the app once via
 # System Settings → Privacy & Security (see the README "Install").
@@ -81,6 +87,13 @@ jobs:
           xcode-version: latest-stable
 
       - name: Build Skelf.app
+        # Stamp the channel into the bundle. A hyphenated tag is a pre-release (someone pushed
+        # `vX.Y.Z-beta.N` or `-rc1` by hand — beta.yml's own betas never reach this workflow), so
+        # it builds as `beta` and carries the full tag as its version; everything else is
+        # production and uses build.sh's committed version verbatim.
+        env:
+          SKELF_CHANNEL: ${{ contains(needs.resolve.outputs.tag, '-') && 'beta' || 'production' }}
+          SKELF_VERSION_OVERRIDE: ${{ contains(needs.resolve.outputs.tag, '-') && needs.resolve.outputs.version || '' }}
         run: ./build.sh
 
       - name: Build DMG + checksum

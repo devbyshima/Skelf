@@ -1,12 +1,25 @@
 # Changelog
 
 All notable changes to Skelf are documented here. The format is based on
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims to follow
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Each version's section is published verbatim as its GitHub Release notes, so it's written for
+users. Entries go under **Added**, **Changed**, **Deprecated**, **Removed**, **Fixed**, or
+**Security**, newest version first.
+
+Releases come off `release/X.Y` branches: `vX.Y.Z-beta.N` on the beta channel, `vX.Y.Z` on
+production. `## [Unreleased]` is what's on the branch but not yet tagged. See
+[RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
 ### Added
+
+- **Beta release channel.** Settings ▸ Updates has an **Include Beta Releases** switch: with it on,
+  the updater also offers pre-release builds (`X.Y.Z-beta.N`) that are stabilizing toward the next
+  version, and moves you onto the final build once it ships. Off by default, and the Updates pane
+  now names the channel the running build came from.
 
 - Comprehensive skill detection. Skelf now finds skills wherever Claude Code keeps them, instead
   of reading a single `~/Dev` base: it honors `CLAUDE_CONFIG_DIR` / `XDG_CONFIG_HOME`, scans every
