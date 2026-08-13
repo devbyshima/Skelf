@@ -12,8 +12,8 @@ ARCH="$(uname -m)"   # arm64 on Apple Silicon
 # (marketing) version, SemVer; SKELF_BUILD is a monotonic build number, bumped each release
 # build. Both are written into Info.plist below and read back at runtime by Bundle+Skelf.swift
 # (skelfShortVersion / skelfBuildVersion) and surfaced via `Skelf --version`.
-SKELF_VERSION="1.5.3"
-SKELF_BUILD="10"
+SKELF_VERSION="1.6.0"
+SKELF_BUILD="11"
 
 # Beta builds stamp a pre-release version without a commit, via env overrides:
 #   SKELF_VERSION_OVERRIDE=1.6.0-beta.1 SKELF_CHANNEL=beta ./build.sh
