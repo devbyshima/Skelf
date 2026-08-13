@@ -15,6 +15,16 @@ ARCH="$(uname -m)"   # arm64 on Apple Silicon
 SKELF_VERSION="1.5.3"
 SKELF_BUILD="10"
 
+# Beta builds stamp a pre-release version without a commit, via env overrides:
+#   SKELF_VERSION_OVERRIDE=1.6.0-beta.1 SKELF_CHANNEL=beta ./build.sh
+# Deliberately named *_OVERRIDE, and set in `if` blocks rather than on the lines above: the two
+# literal assignments above are the production source of truth that cut-release.yml rewrites and
+# release.yml greps (`^SKELF_VERSION=`), so they must stay a single, plainly-matchable line each.
+# SKELF_CHANNEL is production | beta | dev — it drives the updater's channel and feature flags.
+if [ -n "${SKELF_VERSION_OVERRIDE:-}" ]; then SKELF_VERSION="$SKELF_VERSION_OVERRIDE"; fi
+if [ -n "${SKELF_BUILD_OVERRIDE:-}" ]; then SKELF_BUILD="$SKELF_BUILD_OVERRIDE"; fi
+SKELF_CHANNEL="${SKELF_CHANNEL:-production}"
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -31,6 +41,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${SKELF_VERSION}</string>
   <key>CFBundleVersion</key><string>${SKELF_BUILD}</string>
+  <key>SKELFReleaseChannel</key><string>${SKELF_CHANNEL}</string>
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSHighResolutionCapable</key><true/>

@@ -1,0 +1,112 @@
+name: Cut Release Branch
+
+# Opens the BETA channel for a new version: branches `release/X.Y` off main, stamps X.Y.0 into
+# build.sh on that branch, and pushes it — which fires beta.yml and publishes `vX.Y.0-beta.1`.
+#
+# Run this (Actions → Cut Release Branch → Run workflow) when main is feature-complete for the
+# next version. Afterwards:
+#
+#   • main keeps taking features (it's already the NEXT version's trunk).
+#   • release/X.Y takes bug fixes only; each push publishes another beta.
+#   • Promote by tagging vX.Y.0 on the branch — see RELEASING.md.
+#
+# Related workflows: beta.yml (builds each beta), release.yml (builds production tags),
+# cut-release.yml (the older release-straight-off-main path, still fine for a quick patch when
+# no release branch is open).
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version to stabilize, relative to main'
+        required: true
+        type: choice
+        options: [minor, major]
+        default: minor
+
+permissions:
+  contents: write   # push the release branch
+  actions: write    # dispatch beta.yml for the first beta (see the last step)
+
+concurrency: cut-release-branch   # never cut two release branches at once
+
+jobs:
+  cut:
+    name: Cut release/X.Y from main
+    runs-on: ubuntu-latest   # pure shell/git — the macOS build runs in beta.yml on push
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Compute the release version
+        id: v
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          cur=$(grep -E '^SKELF_VERSION=' build.sh | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
+          bld=$(grep -E '^SKELF_BUILD=' build.sh | sed -E 's/.*"([0-9]+)".*/\1/')
+          IFS=. read -r MA MI _ <<< "$cur"
+          case "$BUMP" in
+            major) MA=$((MA + 1)); MI=0 ;;
+            minor) MI=$((MI + 1)) ;;
+          esac
+          {
+            echo "version=$MA.$MI.0"
+            echo "series=$MA.$MI"
+            echo "branch=release/$MA.$MI"
+            echo "build=$((bld + 1))"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Refuse if the branch already exists
+        env:
+          BRANCH: ${{ steps.v.outputs.branch }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "::error::$BRANCH already exists. Push fixes to it instead of cutting it again."
+            exit 1
+          fi
+
+      - name: Create and push the release branch
+        env:
+          BRANCH: ${{ steps.v.outputs.branch }}
+          VERSION: ${{ steps.v.outputs.version }}
+          BUILD: ${{ steps.v.outputs.build }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          sed -i -E "s/^SKELF_VERSION=\"[0-9.]+\"/SKELF_VERSION=\"$VERSION\"/" build.sh
+          sed -i -E "s/^SKELF_BUILD=\"[0-9]+\"/SKELF_BUILD=\"$BUILD\"/" build.sh
+          git commit -am "Stabilize $VERSION on $BRANCH"
+          git push -u origin "$BRANCH"
+
+      - name: Publish the first beta
+        # A push made with GITHUB_TOKEN does NOT fire push-triggered workflows (GitHub's
+        # recursion guard), so creating the branch above can't start beta.yml on its own.
+        # workflow_dispatch is the documented exception, so ask for the run explicitly.
+        env:
+          BRANCH: ${{ steps.v.outputs.branch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh workflow run beta.yml --ref "$BRANCH"; then
+            echo "::warning::Couldn't start beta.yml automatically. Run it by hand: Actions → Beta → Run workflow → $BRANCH"
+          fi
+
+      - name: Summary
+        env:
+          BRANCH: ${{ steps.v.outputs.branch }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          {
+            echo "### Cut \`$BRANCH\` for **$VERSION**"
+            echo ""
+            echo "* \`beta.yml\` is now building \`v$VERSION-beta.1\`."
+            echo "* Bug fixes go to \`$BRANCH\`; features keep going to \`main\`."
+            echo "* Promote with \`git tag -a v$VERSION\` on the branch — see RELEASING.md."
+          } >> "$GITHUB_STEP_SUMMARY"
