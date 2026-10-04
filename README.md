@@ -12,7 +12,7 @@ Browse them as a grid, read a skill's rendered `SKILL.md`, and copy its slash co
 [![Latest release](https://img.shields.io/github/v/release/devbyshima/Skelf?label=download&color=da7756)](https://github.com/devbyshima/Skelf/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS-26%2B-black)](#install)
 [![Swift](https://img.shields.io/badge/Swift-SwiftUI%20%2B%20AppKit-orange)](Package.swift)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue)](LICENSE)
 
 </div>
 
@@ -170,6 +170,15 @@ build.sh                    # swiftc → Skelf.app (git-ignored build artifact)
 ```
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the per-file breakdown.
+
+## License
+
+Skelf is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+You may use, study and change it for any non-commercial purpose. Selling it, or using it in
+anything that earns money, is not allowed. Versions up to 1.5.3 remain under MIT.
+
+The Skelf name and icon are not covered by the license: a modified version must use its own
+name and icon.
 
 ## Credits
 

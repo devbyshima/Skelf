@@ -30,10 +30,10 @@ production. `## [Unreleased]` is what's on the branch but not yet tagged. See
 
 ### Changed
 
-- Re-licensed from MIT to the **GNU Affero General Public License v3.0 (AGPL-3.0)**. Skelf stays
-  free to install, use, and modify, but any redistributed or wrapped version (including one offered
-  over a network) must ship its full source under the same license — so it can't be turned into a
-  closed-source or rebranded product. (Anything already published under MIT remains under MIT.)
+- Re-licensed from MIT to the **PolyForm Noncommercial License 1.0.0**. Skelf stays free to
+  install, use, and change for any non-commercial purpose, but it can't be sold or used in anything
+  that earns money. (Anything already published under MIT remains under MIT.)
+
 
 ## [1.5.3] - 2026-06-24
 
